@@ -1,0 +1,1792 @@
+---
+title: "Cars Analysis"
+author: "Carolina López De La Madriz"
+date: "UC3M 2022"
+output: 
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+    css: my_HW_theme.css
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Introduction
+
+This project consists on the analysis of a data base related with used cars and their corresponding prices, among with other features of cars. More precisely, we will be classifying cars with regard of the amount of pollution they generate. Also, the prices of these used cars will be predicted by building various Machine Learning models.
+
+With this analysis, we have the opportunity to see how cars are related with pollution, depending on their fuel index, fuel type...In addition, we would have an idea of how much a used car costs depending on their model, category, manufacturer, mileage, engine volume....
+
+This study is based on the [data](https://machinehack.com/hackathons/data_hack_mathcothon_car_price_prediction_challenge/data) from a hiring competition.
+
+![](cars1.jpeg)
+
+# Data Pre-processing
+
+```{r}
+rm(list=ls())
+setwd("~/Desktop/Statistical Learning/HW 2")
+
+# LIBRARIES
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(tidyverse)
+library(MASS)
+library(caret)
+library(e1071) 
+library(GGally)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(leaps)
+library(olsrr)
+library(caret)
+library(glmnet)
+library(pROC)
+```
+
+In this section, we will first explore the data. This data contains 19237 observations and 18 variables. Each row corresponds to a car that has been used before, although we will see that some of them may not been used before (as they have 0 mileage).
+
+The columns of the data correspond to the following:
+
+1.  **ID**: identification number for each car.
+
+2.  **Price**: price of the car.
+
+3.  **Levy**: the motor vehicle levy helps cover the cost of accidents on public roads involving moving vehicles. This variable indicates the amount of levy paid for each car.
+
+4.  **Manufacturer**: business entity that has produced the automobile.
+
+5.  **Model**: car design of the manufacturer.
+
+6.  **Prod.year**: year of production.
+
+7.  **Category**: type of car.
+
+8.  **Leather.interior**: whether a car has leather in the interior.
+
+9.  **Fuel.type**: Car fuel type (i.e gas or diesel)
+
+10. **Engine.volume**: total volume of the cylinders in the engine.
+
+11. **Mileage**: km that the car has traveled
+
+12. **Cylinders**: number of cylinders of the car (vital part of the engine where fuel is combusted and power is generated)
+
+13. **Gear.box.type**: type of transmission (i.e automatic or manual)
+
+14. **Drive.wheels**: type of drive of the wheels
+
+15. **Doors**: number of doors
+
+16. **Wheel**: wheel base of a car
+
+17. **Color**: color of the car
+
+18. **Airbags**: number of airbags available in the car
+
+Data pre-processing taking into account the main goal of the project: car price prediction and classification of a new variable that will be created related to the amount of pollution that a car generates. First let us take an insight of the data structure and its composition.
+
+```{r}
+# read the csv file
+data = read.csv("Cars.csv")
+
+head(data)
+
+# structure
+str(data)
+
+summary(data)
+# 19237 observations and 18 variables 
+# 5 numeric columns (integer) and 13 categorical columns (characters)
+```
+
+As it has been stated, there are 19237 observations and 18 variables, where we can find 5 numeric columns and 13 categorical columns.
+
+Before the analysis, we must prepare the input.
+
+## Adjustment and creation of variables
+
+I don't like how the production year is written so I will rewrite it to make it look uniform with the names of the other columns of the data set.
+
+```{r}
+colnames(data)[6] = "Prod.year"
+```
+
+*Mileage* column gives us how many km the car has driven. "km" is written in the column after each reading. However I will remove it, and convert to a numeric variable for a better use.
+
+```{r}
+data$Mileage = gsub('km', '', data$Mileage)
+data$Mileage = as.numeric(data$Mileage)
+```
+
+A car that has 0 km traveled is the same as a brand new car, as it hasn't been used before. Therefore, we will create a new variable (*New*) to know whether a car is new or not.
+
+```{r}
+# if a car has 0 km will mean that is new 
+# let us create a variable for this kind of cars
+data$New = (data$Mileage == 0)
+# TRUE = Yes, new  
+# FALSE = No, not new
+data$New = ifelse(data$New == TRUE, "Yes", "No")
+
+# nas doesn't mean 0 km so, we will just set the nas of mileage to no brand new in this variable
+for (i in 1:nrow(data)){
+  if(is.na(data[i,19])){
+    data[i,19] = 0
+  }else if(data[i,19] == "No"){
+    data[i,19] = 0
+  }else{
+    data[i,19] = 1
+  }
+}
+
+# 1 -> brand new
+# 0 -> used
+
+data$New = as.numeric(data$New)
+sum(data$New == 1) / 19237 # number of brand new cars
+```
+
+We can see that there are not many brand new cars.
+
+In the Engine.volume column, we see that some cars have also written their type of engine; that is turbo, or not turbo. We will just create a new column that shows the type of engine and then remove the turbo part of this variable
+
+```{r}
+# grepl function to test whether a character is in a string
+data$Turbo = grepl("Turbo", data$Engine.volume)
+data$Turbo = ifelse(data$Turbo == TRUE, "Yes", "No")
+
+for(i in 1:nrow(data)){
+  if(data[i, 20] == "Yes"){
+    data[i, 20] = 1
+  }else{
+    data[i, 20] = 0
+  }
+}
+
+# 0 -> no turbo 
+# 1 -> turbo
+data$Turbo = as.numeric(data$Turbo)
+
+# if TRUE, the car is Turbo Engine
+sum(data$Turbo == 1) / 19237 # 0.1% of the cars are turbo 
+
+# now we can remove the Turbo part of Engine.volume and convert the variable to numeric
+data$Engine.volume = gsub('Turbo', '', data$Engine.volume)
+data$Engine.volume = as.numeric(data$Engine.volume)
+
+```
+
+Regarding the *Doors* column, we will make some changes to their information. "04-May" will just be simplified to 4, as it just means that the car has 4 doors. Same thing will be done for "02-Mar", corresponding to 2 doors. The rest of cars will have more than 5 doors (for instance a mini bus).
+
+```{r}
+# Doors column
+unique(data$Doors)
+sum(is.na(data$Doors)) #check just in case
+# 04-may just means 4 
+# 02-mar just means 2
+for (i in 1:nrow(data)){
+  if(data[i,15] == "04-May"){
+    data[i, 15] = 4
+  }else if(data[i,15] == "02-Mar"){
+    data[i,15] = 2
+  }
+}
+
+# it cannot be converted to a numeric variable because >5 is undefined
+```
+
+## Handling missing values
+
+```{r}
+# checking for missing data
+sum(is.na(data))
+colSums(is.na(data))
+```
+
+We can see that there are NAs in some numeric columns: *ID*, *Prod..year*, *Engine* *Volume*, *Mileage*, *Cylinders* and *Airbags*.
+
+NAs in ID will not really be significant as ID is a column that doesn't provide relevant information for the approach of this analysis. In fact, i'm just going to remove this column not because of containing NA's but due to its lack of contribution to the goal of the project. From my point of view, it does not provide information about car prices nor car pollution.
+
+```{r}
+data = data[, -1]
+```
+
+### NAs in Production year
+
+We just have 10 cars with no information related with their year of production. Thus, in this case we can analyze each of them and, considering the model of the car, assign the average year of production of those cars.
+
+```{r}
+nas_year = which(is.na(data$Prod.year))
+# returns the index of the row with the NA value in Prod.year
+
+# I'm going to create a variable with the models of the cars with NA's in Prod.Year
+# with this variable, i will then compute the avg Prod.Year of all the cars in the dataset
+# with each of these models to later assign that value to the NA's that I have
+
+for(car in nas_year){
+  data$Prod.year[car] = round(mean(data$Prod.year[data$Model == data$Model[car]], na.rm = TRUE))
+}
+
+colSums(is.na(data))
+# successfully handled
+```
+
+### NAs in Engine Volume
+
+We have 12 missing values (zeros). The engine volume of a car refers to the volume of fuel and air that can be pushed through a car's cylinders and is measured in cubic centimetres (cc). Then we can predict the NA's with the cylinders column.
+
+```{r}
+nas_eng = which(is.na(data$Engine.volume))
+
+# for each NA, i will assign 
+for(car in nas_eng){
+  data$Engine.volume[car] = round(mean(data$Engine.volume[(data$Cylinders == data$Cylinders[car]) & (data$Model == data$Model[car])], na.rm = TRUE))
+}
+
+colSums(is.na(data))
+# all nas have been succesfully handled except for one
+
+which(is.na(data$Engine.volume))
+data$Cylinders[which(is.na(data$Engine.volume))]
+# apparently, this certain car has an NA in its cylinders, which is the reason why 
+# it hasn't been able to be completely handled
+# for this particular case, i will estimate the na just considering the model of the car
+data$Engine.volume[which(is.na(data$Engine.volume))] = round(mean(data$Engine.volume[data$Model == data$Model[car]], na.rm = TRUE))
+
+colSums(is.na(data))
+# now its ok
+```
+
+### NAs in Mileage
+
+We have 16 missing values. It is difficult to estimate the amount of km of a car. However I will based the estimation on the average km of the production year of the car.
+
+```{r}
+nas_km = which(is.na(data$Mileage)) 
+# returns the index of the row with the NA value in Mileage
+
+# for each NA, i will assign the avg number of km of the cars of the same production year and model as the NA
+for(car in nas_km){
+  data$Mileage[car] = round(mean(data$Mileage[data$Prod.year == data$Prod.year[car]], na.rm = TRUE))
+}
+
+colSums(is.na(data))
+# successfully handled
+```
+
+### NAs in Cylinders
+
+Cylinders are the power unit of an engine. We have 20 missing values which can be handled by using the engine column.
+
+```{r}
+nas_cyl = which(is.na(data$Cylinders))
+
+for(car in nas_cyl){
+  data$Cylinders[car] = round(mean(data$Cylinders[data$Engine.volume == data$Engine.volume[car]], na.rm = TRUE))
+}
+
+colSums(is.na(data))
+# successfully handled
+```
+
+### NAs in Airbags
+
+We have 24 missing values. The airbag, which today is also something normal, was invented in 1971 by Mercedes-Benz, but it was not installed in a car until 1981, and it was not until the 90s that it began to become widespread in all kinds of makes and models. Since 2006 it is mandatory for all cars to have at least two airbags in the front part of the car.
+
+We will take into account this regulation to handle the cars with NAs or 0 airbags as it makes no sense that some cars had airbags before they were even invented (it may be some kind of error).
+
+-   For all cars with Prod.year \< 1981, we will set the number of airbags to 0
+
+-   For all cars with 1981 \< Prod.year \< 2006, if there is a NA it will just be set to 0
+
+-   For all cars with Prod.year \> 2006, if there is a NA it will be set to 2 (mandatory)
+
+```{r}
+for (i in 1:nrow(data)){
+  if(data[i,5] < 1981){ # Prod.year < 1981
+    data[i,17] = 0 # set airbags to 0
+  }else if((data[i, 5] < 2006) & is.na(data[i, 17])){ # Prod.year between 1981 and 2006 and NA in airbag
+    data[i, 17] = 0
+  }else if(is.na(data[i, 17])){ # Prod.year > 2006 and NA in airbag
+    data[i, 17] = 2
+  }
+}
+
+colSums(is.na(data))
+# successfully handled
+```
+
+Thus, for all cars with 0 airbags that have been produced in 2006 or later on, we will just set their number of airbags to 2 (as it is the least amount that they must have for sure).
+
+### NAs in Levy
+
+After analyzing the Levy column, I found out that it does contain missing values but they were given as '-' in the data and that's why we were not able to capture the missing values earlier. Here we could impute '-' in the 'Levy' column with '0' assuming there was no 'Levy'. Or we could impute it with 'mean' or 'median. However, we cannot set these values to 0 as there is a a mandatory insurance for a car ("Seguro obligatorio a terceros") which is equal to 87 (we can see that it is the minimum levy for the rest of the cars). Therefore, for every '-' value, we will just set it to 87.
+
+```{r}
+for (i in 1:nrow(data)){
+  if(data[i, 2] == "-"){
+    data[i, 2] = "87"
+  }
+}
+
+data$Levy = as.numeric(data$Levy)
+```
+
+## Creating more variables
+
+Now we will create the Pollution variable that will be later used for the classification part. This variable will be categorical, with values "HIGH", "MEDIUM" or "LOW" depending on the pollution generated by the car.
+
+In order to determine in which rank a car is, we will use a formula (for generating a number = index to later assign each group to a certain interval depending on this index). For it, we will also create a variable that will contain the fuel index of a car, depending on the CO2 emissions.
+
+After making a research on automobile sites, I have come up with this formula:
+
+**Pollution index = Fuel index \* ( Engine volume + Cylinders )**
+
+```{r}
+unique(data$Fuel.type)
+```
+
+The Coefficient of Fuel is based on the calculation of co2 [emissions](https://www.acea.auto/figure/average-co2-emissions-from-new-passenger-cars-by-eu-country/) of each type of Fuel.
+
+| Type of Fuel                | CO2 emissions (in kg per liter) |
+|-----------------------------|---------------------------------|
+| Diesel                      | 2.4                             |
+| Petrol                      | 2.3                             |
+| LPG (Licuated Petrol Gas)   | 1.51                            |
+| CNG (Cars with Natural Gas) | 1.39                            |
+| Hybrid                      | 0.7                             |
+| Plug-in-hybrid              | 0.5                             |
+| Hydrogen                    | 0.1                             |
+
+: CO2 EMISSIONS
+
+Considering the most pollutant fuel as diesel, we can compute the indexes for the rest of the fuels and create a new column, containing them depending on the car.
+
+```{r}
+# establishing the CO2 emissions
+co2_emission_diesel = 2.4
+co2_emission_petrol = 2.3
+co2_emission_lpg = 1.51
+co2_emission_cng = 1.39
+co2_emission_hybrid = 0.7
+co2_emission_plug_in = 0.5
+co2_emission_hydrogen = 0.1
+
+# computing the coefficients
+diesel = round(co2_emission_diesel / co2_emission_diesel, 2)
+petrol = round(co2_emission_petrol / co2_emission_diesel, 2)
+lpg = round(co2_emission_lpg / co2_emission_diesel, 2)
+cng = round(co2_emission_cng / co2_emission_diesel, 2)
+hybrid = round(co2_emission_hybrid / co2_emission_diesel, 2)
+plug_in = round(co2_emission_plug_in / co2_emission_diesel, 2)
+hydrogen = round(co2_emission_hydrogen / co2_emission_diesel, 2)
+
+data$Fuel.idx = 0
+# column for determining the index of the fuel type by means of pollution
+
+for(i in 1:nrow(data)){
+  if(data[i, 8] == "Diesel"){
+    data[i, 20] = diesel
+  }else if(data[i, 8] == "Petrol"){
+    data[i, 20] = petrol
+  }else if(data[i, 8] == "LPG"){
+    data[i, 20] = lpg
+  }else if(data[i, 8] == "CNG"){
+    data[i, 20] = cng
+  }else if(data[i, 8] == "Hybrid"){
+    data[i, 20] = hybrid
+  }else if(data[i, 8] == "Plug-in Hybrid"){
+    data[i, 20] = plug_in
+  }else{ # hydrogen
+    data[i, 20] = hydrogen
+  }
+}
+
+```
+
+We have to create the *Pollution* variable. This column will have the correspondent result to the previous formula applied on each car to classify the vehicles depending on how pollutant they are.
+
+```{r}
+data$Pollution = 0 # creating the column and initializing it to 0
+
+# index of fuel * (Engine.volume + Cylinders)
+for(i in 1:nrow(data)){
+  data[i, 21] = data[i, 20] * (data[i, 9] + data[i, 11])
+}
+
+summary(data$Pollution)
+```
+
+Right now pollution contains the result of the formula. Now cars will be classified as:
+
+-   HIGH: pollution \> 6.5
+
+-   MEDIUM: pollution \< 4
+
+-   LOW: pollution \<= 4
+
+```{r}
+for(i in 1:nrow(data)){
+  p = data[i, 20] * (data[i, 9] + data[i, 11])
+  if(p > 6.5){ # HIGH
+    data[i, 21] = "HIGH"
+  }else if(p < 4){ # LOW
+    data[i, 21] = "LOW"
+  }else{ # MEDIUM
+    data[i, 21] = "MEDIUM"
+  }
+}
+```
+
+*Price* is going to be the target column/dependent feature for the regression part of the project.
+
+*Pollution* will be the target column for the classification part.
+
+## Outliers
+
+Studying the outliers of the numeric variables by IQR:
+
+### Outliers in Price
+
+```{r}
+QI = quantile(data$Price, 0.25)
+QS = quantile(data$Price, 0.75)
+IQR = QS-QI
+
+names(QI) = NULL
+names(QS) = NULL
+
+sum(data$Price < QI - 1.5*IQR | data$Price > QS + 1.5*IQR)
+
+
+ggplot(data = data, mapping = aes(y = Price)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Price", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+
+outliers = c()
+data$Price = as.numeric(data$Price)
+for(i in 1:nrow(data)){
+  if(data[i, 1] < (QI - 1.5*IQR) | data[i, 1] > (QS + 1.5*IQR)){
+    outliers = c(outliers, i)
+  }
+  
+}
+
+a = head(which(data$Price < (QI - 1.5*IQR) | data$Price > (QS + 1.5*IQR))) 
+prices = c()
+for (i in a){
+  prices = c(prices, data[i, 1])
+}
+
+prices
+```
+
+As we can see the outliers of the price variables are very large numbers. If we take a look at the data, we have very small values for prices of cars, which someone may think that it does not make much sense. However, this can be possible as in some cases it is cheaper to sell a car (usually old cars) at a very low price than to take it to the car scrapping. Indeed, they may be cars that do not work well and need to be fixed. We should also take into account that this data set is mainly of used cars. For these reasons, cars with low prices make sense and we can see in the data set that these kind of cars have a very large number of mileage which, again, is in favor of this suggested idea.
+
+However, in order to make the comparison and analysis of prices reasonable, I will remove all cars which are not from the 21st century. From my point of view, it doesn't make sense to be comparing prices within an interval of time that big (1939-2020) because of factors such as the inflation and the continuous change of currency.
+
+```{r}
+not21 = c() # vector which will contain the position of all the cars which are not form the 21st century
+for(i in 1:nrow(data)){
+  if(data[i, 5] < 2000){
+    not21 = c(not21, i)
+  }
+  
+}
+
+length(not21) # 986 is not even 0.1% of the data
+
+data = data[-not21, ]
+```
+
+This change doesn't really affect our data, as cars from those years were not even 0.1% of the data. Now that we are just considering cars of the 21st century, we can safely compute the outliers in *Price*.
+
+```{r}
+QI = quantile(data$Price, 0.25)
+QS = quantile(data$Price, 0.75)
+IQR = QS-QI
+
+names(QI) = NULL
+names(QS) = NULL
+
+sum(data$Price < QI - 1.5*IQR | data$Price > QS + 1.5*IQR)
+
+
+ggplot(data = data, mapping = aes(y = Price)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Price", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+From the boxplot, we see that many cars have a cheap price, but this can certainly be possible as our data set is not just of new cars, we have a very wide number of car categories.
+
+Let us remove the outliers.
+
+```{r}
+outliers = c()
+for(i in 1:nrow(data)){
+  if(data[i, 1] < (QI - 1.5*IQR) | data[i, 1] > (QS + 1.5*IQR)){
+    outliers = c(outliers, i)
+  }
+  
+}
+
+data = data[-outliers, ]
+```
+
+### Outliers in Levy
+
+```{r}
+QI = quantile(data$Levy, 0.25)
+QS = quantile(data$Levy, 0.75)
+IQR = QS-QI
+
+sum(data$Levy < QI - 1.5*IQR | data$Levy > QS + 1.5*IQR)
+
+ggplot(data = data, mapping = aes(y = Levy)) +
+  geom_boxplot(fill = "slategray1", outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Levy", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+We can see that there are several outliers that we can safely remove.
+
+```{r}
+outliers = c()
+for(i in 1:nrow(data)){
+  if(data[i, 2] < (QI - 1.5*IQR) | data[i, 2] > (QS + 1.5*IQR)){
+    outliers = c(outliers, i)
+  }
+  
+}
+
+data = data[-outliers, ]
+```
+
+### Outliers in Year of Production
+
+```{r}
+ggplot(data = data, mapping = aes(y = Prod.year)) +
+  geom_boxplot(fill = "darkolivegreen1", outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Production year", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+For this variable, we see there are several outliers but it is not necessary to remove them, because we want to consider all the cars from the 21st century. We may have more cars from 2010 until now, but that doesn't mean that we don't want to consider the ones from years such as 2000, beacuse they are still part of our analysis. Therefore, it not necessary to remove the outliers of this variable.
+
+### Outliers in Engine Volume
+
+```{r}
+QI = quantile(data$Engine.volume, 0.25)
+QS = quantile(data$Engine.volume, 0.75)
+IQR = QS-QI
+
+sum(data$Engine.volume < QI - 1.5*IQR | data$Engine.volume > QS + 1.5*IQR)
+
+ggplot(data = data, mapping = aes(y = Engine.volume)) +
+  geom_boxplot(fill = "thistle1", outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Engine Volume", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+From the boxplot we see that we have several outliers, which may influence our analysis on the classification or prediction part as this variable seems to be relevant for a car (from its definition, we will see later if this is true or not though)
+
+```{r}
+outliers = c()
+
+for(i in 1:nrow(data)){
+  if(data[i, 9] < (QI - 1.5*IQR) | data[i, 9] > (QS + 1.5*IQR)){
+    outliers = c(outliers, i)
+  }
+  
+}
+data = data[-outliers, ]
+```
+
+### Outliers in Mileage
+
+```{r}
+QI = quantile(data$Mileage, 0.25)
+QS = quantile(data$Mileage, 0.75)
+IQR = QS-QI
+
+sum(data$Mileage < QI - 1.5*IQR | data$Mileage > QS + 1.5*IQR)
+
+ggplot(data = data, mapping = aes(y = Mileage)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Mileage", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+From the boxplot, we can observe there are some outliers. We should take into account that this variable is very relative as it depends on the owner of the car, its preferences (it may be a person that loves to travel a lot and so she/he uses the car frequently)... Therefore, I feel like we should keep the outliers as it could help with the analysis by the characteristics that these kind of cars (the ones that have consumed a very large distance) have and how they affect the price variable.
+
+### Outliers in Cylinders
+
+Let us compute them by the 3-sigma rule.
+
+```{r}
+mu = mean(data$Cylinders)
+sigma = sd(data$Cylinders)
+
+sum(data$Cylinders < mu - 3*sigma | data$Cylinders > mu + 3*sigma)
+```
+
+Cylinders' outliers will not be removed as we have already removed Engine Volume outliers which is a variable that is related with cylinders (the engine volume of a car depends on the cylinders of it). At the same time, it may be interesting for the analysis to see how the price and the pollution of a car is affected by these outliers. Indeed they may be contribute for a better analysis.
+
+### Outliers in Airbags
+
+```{r}
+QI = quantile(data$Airbags, 0.25)
+QS = quantile(data$Airbags, 0.75)
+IQR = QS-QI
+
+sum(data$Airbags < QI - 1.5*IQR | data$Airbags > QS + 1.5*IQR)
+
+ggplot(data = data, mapping = aes(y = Airbags)) +
+  geom_boxplot(fill = "mediumslateblue", outlier.color = "thistle", outlier.shape = 4) +
+  ggtitle(expression(atop("Boxplot of Airbags", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+From the plot, we see that there are not outliers for the *Airbags* variable.
+
+*New* and *Turbo* are also numeric variables, but they were taken from *Mileage* and *Engine Volum*e and actually represent logic values.
+
+### Outliers in Fuel index
+
+```{r}
+QI = quantile(data$Fuel.idx, 0.25)
+QS = quantile(data$Fuel.idx, 0.75)
+IQR = QS-QI
+
+sum(data$Fuel.idx < QI - 1.5*IQR | data$Fuel.idx > QS + 1.5*IQR)
+
+ggplot(data = data, mapping = aes(y = Fuel.idx)) +
+  geom_boxplot(fill = "plum2", outlier.color = "red", outlier.shape = 4) + 
+  ggtitle(expression(atop("Boxplot of Fuel idx", atop(italic("In Red Outliers"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+```
+
+We have 1 outlier that can be safely removed from the data.
+
+```{r}
+outlier = which(data$Fuel.idx < QI - 1.5*IQR | data$Fuel.idx > QS + 1.5*IQR)
+
+data = data[-outlier, ]
+```
+
+# Visualization
+
+In this part we consider general plots to get an insight of the data set. We also try to start looking at relations with our target variables.
+
+```{r}
+plot_ly(data, labels = ~Color, type = 'pie') %>%
+  layout(title = 'Color of Cars',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+```
+
+This plot shows the different proportions of the colors of cars that are being sold. We see that black, white and silver cars are the 3 top colors of cars on sale. I found interesting that 6.93% of the cars are purple, which I usually consider it to be as an unusual color for a car.
+
+```{r}
+ggplot(data = data) +
+  geom_bar(mapping = aes(x = Category, fill = Fuel.type))
+```
+
+In this graph we can appreciate the number of cars that are on sale depending on the category that they belong to. For each category, the bar is divided in regard to the proportion of fuel type that is mainly used by that category. Furthermore, we can see that the most common category is *Sedan*. That makes sense, as Sedan makes reference to the normal cars in general ( defined as a 4-door passenger car with a trunk that is separate from the passengers). Among all cars, *Petrol* seems to be the most common fuel type, follower by *Diesel* and *Hybrid.*
+
+```{r}
+ggplot(data = data, aes(x = reorder(Manufacturer, Price),y = Price)) + 
+  geom_bar(stat ='identity',aes(fill = Price))+
+  coord_flip() + 
+  theme_grey() + 
+  scale_fill_gradient(name="Price Level")+
+  labs(title = 'Ranking of Manufacturers by Price',
+       y='Manufacturer', x='Price')+ 
+  geom_hline(yintercept = mean(data$Price),size = 1, color = 'blue')
+
+```
+
+Not many cars have a very high price, but from the plot we see how "Hyundai" and "Toyota" are the two companies with higher prices for their cars in this data set. There are many others which have common cheap prices.
+
+```{r}
+ggplot(data, aes(Engine.volume)) + geom_density(aes(fill=factor(Cylinders)), alpha=0.8) + 
+  labs(title="Density plot", 
+       subtitle="Engine volume grouped by number of cylinders",
+       x="Engine Volume",
+       fill="Cylinders")
+
+```
+
+At first, someone may think that the engine volume should depend on the number of cylinders of a car. Cars with higher number of cylinders, that are the most powerful cars, always try to optimize the volume of the engine so that there are more cylinders in a reduced space which also means a reduction in the weight (but that means an increase in the price, usually)
+
+We will later see if this idea is true or not. But the cars with more cylinders in a very low engine (low engine volume), will cost (hypothetically) more than the others, being sportive cars for instance.
+
+```{r}
+ggplot(data, aes(Gear.box.type, Prod.year)) + geom_boxplot(aes(fill=factor(Pollution))) + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6)) + 
+  labs(title = "Box plot", 
+       subtitle = "Production year grouped by Type of transmission",
+       x = "Type of transmission",
+       y=  "Production Year", 
+       fill = "Pollution")
+
+```
+
+From this plot we see that the automatic cars are the most recent type of cars and the manual cars the most antique.
+
+Also, the cars with higher pollution were produced approximately between 2000 and 2010, and tiptronic cars are the ones that contribute most to pollution. We can see how for each transmission type, the cars that are more pollutant were produced earlier than the ones that are less pollutant, which makes sense as during the years, governments have been adopting measurements to stop pollution
+
+```{r}
+ggplot(data, aes(x = Airbags)) +
+  geom_histogram(fill="darkseagreen2", col="darkslateblue", binwidth = 2)
+
+```
+
+The histogram above shows the amount of cars that have different number of airbags. As it can be observed, most of the vehicles have around 4 airbags. There are also many vehicles with around 12 airbags.
+
+```{r}
+ggplot(data, aes(x = Engine.volume, y = Levy, col = Cylinders)) + 
+  geom_point(size = 2, shape = 1, alpha = 0.4) + 
+  labs(x = "Engine Volume",y = "Levy", color = "Cylinders")
+
+```
+
+When comparing the influence of the engine volume in the Levy, we can notice that there is a kind of positive tendency as the engine volume increases related with the levy paid for a car (insurance). This is probably because as the size of the engine increases, the car is better (also more expensive) and so the insurance companies usually require a greater amount of money to be paid
+
+```{r}
+ggplot(data) + geom_point(aes(x = Price, y = Prod.year, color = Gear.box.type), 
+                          size=1)
+```
+
+Indeed, most of the cars are automatic, mainly from 2005 to 2020. In the earliest 20's there were more manual cars and the price was smaller. As the production year increases, the price increases as well, although there are still many different prices as not all the cars are new nor have the best conditions or characteristics.
+
+```{r}
+ggplot(data, aes(x=Category, y= Gear.box.type, color = Fuel.type)) + 
+  geom_jitter(size = 2, width = 0.1, alpha = 0.4) + 
+  labs(x = "Category",y = "Type of transmission", color = "Type of Fuel")
+```
+
+Regarding the different transmission types that we consider in this data set, we can see how each category of cars use a different type of fuel from the plot. The three colors that appear most are the ones corresponding to petrol, hybrid and diesel. Diesel is mainly in the manual cars, and appears most in "Goods wagon" and "Microbus". Most of the cars use petrol or are hybrids though petrol cars are mainly noticed in manual and tiptronic cars, where "Sedan" and "Jeep" have the greatest number of petrol cars. Hybrid cars are mainly of automatic or variator transmission, and are mainly found in "Hatchback" or "Sedan".
+
+Let us make some plots taking into account the important variables that we are considering for the project (*Pollution* and *Price*)
+
+```{r}
+ggplot(data = data) +
+  geom_smooth(mapping = aes(x = Prod.year, y = Price), color = 'red')
+```
+
+In this plot we can see that, as the production year increases, the price of a car increases as well. Probably because of the change of currency that has taken place among the years. However, from 2017 approximately the price starts decreasing. I feel like this may be due to, for instance, the new renting options that have appeared, generating a decrease on the number of sold cars, and making the people who is trying to sell the cars to decrease the prices in order to actually make profit.
+
+```{r}
+ggplot(data, aes(x=as.factor(Drive.wheels), y=Price)) + geom_boxplot(fill="cornflowerblue") +
+  ggtitle("Total Price vs Drive wheels")
+```
+
+With this plot we observe that cars being sold are usually 4x4, and that the mean price of the three types is slightly similar. We can also notice that the amount of cars of "Front" wheel type is smaller than the amount of the other two (of course, being the 4x4 type the one with more cars). But in general, this distribution is pretty similar for the three types. The most noticeable difference is the amount of cars of each type.
+
+# Classification
+
+![](pollutantcars.jpeg)
+
+Let's start with the classification part, where we will try to predict a target class: *Pollution*. The algorithm needs to identify which class does a data object belong to.
+
+## Preparing data
+
+```{r}
+data2 = data # data where I will make changes on the type of the variables
+```
+
+```{r}
+# first character to factor
+# then factor to numeric
+
+data2$Manufacturer = as.factor(data2$Manufacturer)
+data2$Manufacturer = as.numeric(data2$Manufacturer)
+
+data2$Model = as.factor(data2$Model)
+data2$Model = as.numeric(data2$Model)
+
+data2$Category = as.factor(data2$Category)
+data2$Category = as.numeric(data2$Category)
+
+data2$Leather.interior = as.factor(data2$Leather.interior)
+data2$Leather.interior = as.numeric(data2$Leather.interior)
+
+data2$Fuel.type = as.factor(data2$Fuel.type)
+data2$Fuel.type = as.numeric(data2$Fuel.type)
+
+data2$Gear.box.type = as.factor(data2$Gear.box.type)
+data2$Gear.box.type = as.numeric(data2$Gear.box.type)
+
+data2$Drive.wheels = as.factor(data2$Drive.wheels)
+data2$Drive.wheels = as.numeric(data2$Drive.wheels)
+
+data2$Doors = as.factor(data2$Doors)
+data2$Doors = as.numeric(data2$Doors)
+
+data2$Wheel = as.factor(data2$Wheel)
+data2$Wheel = as.numeric(data2$Wheel)
+
+data2$Color = as.factor(data2$Color)
+data2$Color = as.numeric(data2$Color)
+
+data2$Pollution= as.factor(data2$Pollution)
+data2$Pollution = as.numeric(data2$Pollution)
+```
+
+We start by converting data to factors. Specifically, the *Pollution* variable. As it was mentioned before, it will be representing how pollutant a car is ("HIGH", "MEDIUM" or "LOW"). We can see the number of cars that belong to each category.
+
+```{r}
+data2$Pollution[data2$Pollution == 2] <- 'LOW'
+data2$Pollution[data2$Pollution == 1] <- 'HIGH'
+data2$Pollution[data2$Pollution == 3] <- 'MEDIUM'
+data2$Pollution=as.factor(data2$Pollution)
+levels(data2$Pollution)
+table(data2$Pollution)
+```
+
+Now we create the data partition.
+
+```{r}
+in_train = createDataPartition(data2$Pollution, p = 0.8, list = FALSE)  
+train = data2[in_train,]
+test = data2[-in_train,]
+nrow(train)
+nrow(test)
+
+table(train$Pollution)/length(train$Pollution)
+```
+
+Correlated data: (matrix where the correlation between all the possible pairs of values of the data are displayed; easier to identify and visualize patterns)
+
+```{r}
+# correlation 
+ggcorr(train[,-21], label = T)
+```
+
+The variables are not highly correlated in this data base, so maybe the accuracies of the model are not going to be that high.
+
+## Bayes Classifiers
+
+### Benchmark
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 5,
+                     classProbs = TRUE, 
+                     verboseIter=T)
+
+# We have many predictors, hence use penalized logistic regression
+lrFit <- train(Pollution ~ ., 
+               method = "glmnet",
+               tuneGrid = expand.grid(alpha = seq(0, 1, 0.1), lambda = seq(0, .1, 0.02)),
+               data = train,
+               preProcess = c("center", "scale"),
+               trControl = ctrl)
+
+# print(lrFit)
+lrPred = predict(lrFit, test)
+confusionMatrix(lrPred, test$Pollution)
+```
+
+```{r}
+table(train$Pollution)
+maximum=max(table(test$Pollution))
+accuracy=maximum/nrow(test)
+accuracy
+
+```
+
+There is too much noise in this model and the efficiency is not that good so we are going to omit it, too simple. We should consider as good accuracies the ones higher than this one.
+
+### LDA
+
+```{r}
+lda.model= lda(Pollution ~ ., data=train, prior=c(0.15,0.28, 0.57))
+lda.model
+```
+
+The probabilities of the medium class are greater than the ones from the high and low classes. We can see two linear discriminants as we there are 3 groups.
+
+```{r}
+prediction = predict(lda.model, newdata=test)$class
+head(prediction)
+```
+
+```{r}
+# performance by confusion matrix
+# predictions in rows, true values in columns
+
+confusionMatrix(prediction, test$Pollution)$table
+confusionMatrix(prediction, test$Pollution)$overall[1]
+```
+
+Indeed, we have increased the accuracy with respect to the last model, nearly 97%. This result is probably due to the fact that the variable considered as target was created in the pre-processing part of the project as a combination of other variables and considering the influence of each car to the CO2 emissions.
+
+LDA is using means and variances of each class in order to create a linear boundary (or separation) between them, which will be delimited by the coefficients. The first thing we see are the **Prior probabilities of groups**, which are the probabilities that already exist in the training data. Then we see the group means, which are the average predictor within each class. Finally, the coefficients of the linear discriminants (LD1 and LD2) are displayed. They provide the highest possible discrimination among various classes to find the linear combination of the features, which is what will separate them into classes of objects with best performance.
+
+```{r}
+model <- lda(Pollution ~ ., data=train, prior=c(0.15,0.28, 0.57))
+```
+
+```{r}
+probability = predict(model, test)$posterior
+
+roc.lda <- roc(test$Pollution,probability[,3])
+auc(roc.lda) 
+
+plot.roc(test$Pollution, probability[,3],col="deeppink", print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", print.thres=TRUE)
+```
+
+After plotting the ROC curve, we see the illustration of the the sensitivity and specificity of each of the cut points of the test. The AUC (Area Under the Curve) is relatively high, so we can see that it is a good model to predict in our data base.
+
+### QDA
+
+```{r}
+qda.model = qda(Pollution ~ ., data = train, prior=c(0.15,0.28, 0.57))
+qda.model
+```
+
+```{r}
+prediction = predict(qda.model, newdata=test)$class
+head(prediction)
+```
+
+```{r}
+confusionMatrix(prediction, test$Pollution)$table
+confusionMatrix(prediction, test$Pollution)$overall[1]
+```
+
+```{r}
+model <- qda(Pollution ~ ., data=train, prior=c(0.15,0.28, 0.57))
+```
+
+We can clearly see that we reach more or less the same conclusions than with the previous analysis, but with a bit less of accuracy. As with LDA, the observation of each class is drawn from a normal distribution. However, the main difference is that QDA assumes that each class has its own covariance matrix and so this will mean an increase in the number of parameters.
+
+```{r}
+probability = predict(model, test)$posterior
+
+roc.lda <- roc(test$Pollution,probability[,3])
+auc(roc.lda) 
+
+plot.roc(test$Pollution, probability[,3],col="deeppink", print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", print.thres=TRUE)
+```
+
+The AUC is a bit lower in this descriptive analysis and we can see that there is no huge difference between the data set and the subset.
+
+## Decision Trees
+
+```{r}
+# Hyper-parameters
+control = rpart.control(minsplit = 30, maxdepth = 10, cp=0.01)
+
+# minsplit: minimum number of observations in a node before before a split
+# maxdepth: maximum depth of any node of the final tree
+# cp: degree of complexity, the smaller the more branches
+
+```
+
+```{r}
+model = Pollution ~.
+dtFit <- rpart(model, data=train, method = "class", control = control)
+summary(dtFit)
+```
+
+```{r}
+rpart.plot(dtFit, digits=3)
+```
+
+We start at the root node (top of the graph).
+
+At the top, we can see the overall probability for a car to be pollutant. It shows the proportion of each category of pollution that we have. 15 percent for the *HIGH* , 28 percent for the *LOW* and 56 percent for the *MEDIUM.* This node asks whether the index of Fuel is greater than 0.795 or not, and then go down to the root's child nodes (depth 2) depending on the answer. If we look at the graph, we can clearly follow the path depending on the different characteristics that we have for a car, to finally arrive to a conclusion of whether the car is pollutant or not ( this happens when we reach a leaf node).
+
+```{r}
+control = rpart.control(minsplit = 40, maxdepth = 12, cp=0.001)
+dtFit <- rpart(model, data=train, method = "class", control = control)
+summary(dtFit)
+```
+
+```{r}
+rpart.plot(dtFit, digits=3)
+```
+
+In this tree, we notice that we have more nodes (the tree is now full). We have set the complexity parameters differently. Still, we start at the root node (initial split) and follow the path depending on the car features to know the chance of it of being too pollutant, medium, or low. The branches link the nodes together and refer to the corresponding variable. The decision tree is a very useful tool in order to do simple predictions about our data set. It allows us to do a deeper analysis and compute estimations that with an exploratory analysis we are not able to obtain.
+
+### Prediction
+
+```{r}
+dtPred <- predict(dtFit, test, type = "class")
+dtProb <- predict(dtFit, test, type = "prob")
+threshold = 0.2
+dtPred = rep("HIGH", nrow(test))
+dtPred[which(dtProb[,2] > threshold)] = "LOW"
+dtPred[which(dtProb[,3] > threshold)] = "MEDIUM"
+confusionMatrix(factor(dtPred), test$Pollution)
+```
+
+Regarding accuracy, we obtain a very similar accuracy to the last models, which we have seen is a good accuracy in our database. With the confusion matrix we can better evaluate the classification performance. The idea is to count the number of times True instances are classified as False.
+
+## With Caret
+
+```{r}
+caret.fit <- train(model, 
+                   data = train, 
+                   method = "rpart",
+                   control=rpart.control(minsplit = 40, maxdepth = 12),
+                   trControl = trainControl(method = "cv", number = 5),
+                   tuneLength=10)
+caret.fit
+```
+
+```{r}
+rpart.plot(caret.fit$finalModel)
+```
+
+The same thing can be done using "Caret". As we see the re-sampling was done with the cross-validation method (as we set it in the control argument), with 5 folds. The accuracy of the results varies from 60% to 99%. The one selected to obtain the best model was, of course, the largest one with a complexity parameter (cp) of 0.001255831. The accuracy is still very high (good).
+
+```{r}
+dtProb <- predict(caret.fit, test, type = "prob")
+threshold = 0.2
+dtPred = rep("HIGH", nrow(test))
+dtPred[which(dtProb[,2] > threshold)] = "LOW"
+dtPred[which(dtProb[,3] > threshold)] = "MEDIUM"
+confusionMatrix(factor(dtPred), test$Pollution)$table
+CM = confusionMatrix(factor(dtPred), test$Pollution)$table
+
+```
+
+## Random Forest
+
+```{r}
+rf.train <- randomForest(Pollution ~., data=train,ntree=200
+                         ,mtry=10,importance=TRUE, do.trace=T, cutoff=c(0.3, 0.2,0.3))
+```
+
+### Variable Importance
+
+```{r}
+rf_imp <- varImp(rf.train)
+plot(rf_imp, scales = list(y = list(cex = .95)))
+
+# mtry: number of variables randomly sampled as candidates at each split
+# ntree: number of trees to grow
+# cutoff: cutoff probabilities in majority vote
+```
+
+### Prediction
+
+```{r}
+rf.pred <- predict(rf.train, newdata=test)
+confusionMatrix(rf.pred, test$Pollution)
+```
+
+```{r}
+rfPred = predict(rf.train, newdata=test)
+CM = confusionMatrix(factor(rfPred), test$Pollution)$table
+
+
+threshold = 0.2
+rfProb = predict(rf.train, newdata=test, type="prob")
+rfPred = rep("HIGH", nrow(test))
+rfPred[which(rfProb[,2] > threshold)] = "LOW"
+rfPred[which(rfProb[,3] > threshold)] = "MEDIUM"
+confusionMatrix(factor(rfPred), test$Pollution)$table
+```
+
+Random forest creates several classification trees, not looking for the best prediction but making multiple random predictions. Consequently, there is a higher diversity, which will indeed help the prediction become much smoother.
+
+Furthermore, this algorithm is to be highlighted by being powerful and highly accurate, as well as its feature of being able to perform so many predictions at once, with no need of normalization. Besides, it reduces the risk of overfitting, it provides flexibility (since it can handle both regression and classification tasks with a high degree of accuracy) and it makes it easy to evaluate variable importance, or contribution to the model.
+
+The random forest accuracy we have got , again is very high , which confirms the mentioned benefits since it is, higher than the one from the decision tree algorithm (although not by much, as both accuracies are already pretty high due to the way this variable has been created). Also, the number of grown
+trees has been 200, while the number of variables tried at each split has been 10. Parameters such as kappa have a great value.
+
+On the whole, between decision trees and random forest, it goes without saying that when looking for the best predictions, random forest is the best choice. Even though it may take more time (being worse for higher dimensions data), it returns a better prediction of the data that is being evaluated.
+
+# Advanced Regression
+
+![](carpricing.jpeg)
+
+## Preparing data
+
+In this part, we will be predicting the price of a car.
+
+```{r}
+# DATA PARTITION
+data2 = data # data where i will convert all variables to numerical
+
+```
+
+```{r}
+# first character to factor
+# then factor to numeric
+
+data2$Manufacturer = as.factor(data2$Manufacturer)
+data2$Manufacturer = as.numeric(data2$Manufacturer)
+
+data2$Model = as.factor(data2$Model)
+data2$Model = as.numeric(data2$Model)
+
+data2$Category = as.factor(data2$Category)
+data2$Category = as.numeric(data2$Category)
+
+data2$Leather.interior = as.factor(data2$Leather.interior)
+data2$Leather.interior = as.numeric(data2$Leather.interior)
+
+data2$Fuel.type = as.factor(data2$Fuel.type)
+data2$Fuel.type = as.numeric(data2$Fuel.type)
+
+data2$Gear.box.type = as.factor(data2$Gear.box.type)
+data2$Gear.box.type = as.numeric(data2$Gear.box.type)
+
+data2$Drive.wheels = as.factor(data2$Drive.wheels)
+data2$Drive.wheels = as.numeric(data2$Drive.wheels)
+
+data2$Doors = as.factor(data2$Doors)
+data2$Doors = as.numeric(data2$Doors)
+
+data2$Wheel = as.factor(data2$Wheel)
+data2$Wheel = as.numeric(data2$Wheel)
+
+data2$Color = as.factor(data2$Color)
+data2$Color = as.numeric(data2$Color)
+
+data2$Pollution= as.factor(data2$Pollution)
+data2$Pollution = as.numeric(data2$Pollution)
+```
+
+```{r}
+in_train <- createDataPartition(data2$Price, p = 0.75, list = FALSE)  # 75% for training
+training <- data2[in_train,]
+testing <- data2[-in_train,]
+nrow(training)
+nrow(testing)
+```
+
+## Linear Approaches
+
+```{r}
+corr=cor(training)
+```
+
+First we try a simple regression.
+
+```{r}
+linFit <- lm(Price ~., data=training)
+summary(linFit)
+```
+
+We can see that the multiple R-squared is 0.3. This means that the proportion of variation in dependent variable that can be explained by the independent variables is very low. We will try different models later to try to increase it in order to provide a better measure of how well observed outcomes are replicated. But we must take into account that the value is, at first, very low.
+
+It is also to consider that the R-squared value could have been that low because we are not considering many variables for the prediction. Adding more variables to the model may be helpful to improve this value and the performance of the model in general (we will see later).
+
+```{r}
+par(mfrow=c(2,2))
+plot(linFit, pch=21 ,bg='blue1',cex=1)
+```
+
+These plots show the different lines found to fit the data points available on each plot, so that we can use them for better predictions.
+
+The residuals vs fitted plot is used to detect non-linearity, unequal error variances and outliers. We can see that we have a slightly curve in this graph. However, considering that we have a lot of data points, we could say that linearity seems to be holding reasonably okay as the red line is close to the dashed line. As we move to the right on the x-axis, the spread of the residuals seems to be increasing. At the same time, there are many outliers (with large residual values).
+
+The theoretical quantiles plot (Q-Q) tells us that the data is normally distributed as the points are kind of falling on a 45-degree line.
+
+The fitted values plot is showing the regression line (best line fitting the data) that represents the regression equation of the model.
+
+The residuals vs leverage plot allows us to identify influential observations in the model. We can say that there are very few observations that have a high leverage and so therefore, just few observations have a strong influence on the coefficients of the regression model. If we remove these observations, the coefficients of the model will definitely change. The points that fall outside of Cook's distance (those are the red dashed lines) are considered to be influential observations. From the graph, we can see that we don't have any influential points.
+
+```{r}
+predictions=predict(linFit,newdata = testing)
+cor(predictions, testing$Prod.year)^2
+
+par(mfrow=c(1,1)) # to set plots to normal back again
+```
+
+Right now, this model is not very good (very low correlation).
+
+## Multiple Regression
+
+We will now try to see if with multiple regression we can obtain better results.
+
+```{r}
+linFit <- lm(Price ~ Fuel.idx + Mileage + Price + Levy + Engine.volume + Manufacturer +
+               Category + Cylinders + Fuel.type +
+               Gear.box.type + Drive.wheels + Wheel + Color + Airbags + New + 
+               Turbo, data=training)
+summary(linFit)
+```
+
+R2 is actually lower than before (some variables may not be significant). Right now these results are just telling us that the independent variables are not explaining much (or any) of the dependent variables. The model we have by the moment is not explaining the variance in the dependent variable in the sample we have.
+
+## Model Selection
+
+```{r}
+exhaustive <- regsubsets(Price ~ Fuel.idx + Mileage + Prod.year + Levy + Engine.volume + Manufacturer
+                         + Model + Category + Cylinders + Leather.interior + Fuel.type +
+                           Gear.box.type + Drive.wheels + Wheel + Color + Airbags + New + 
+                           Turbo, data=training)
+
+model = Price ~ Fuel.idx + Mileage + Prod.year + Levy + Engine.volume + Manufacturer+
+  Model + Category + Cylinders + Leather.interior + Fuel.type +
+  Gear.box.type + Drive.wheels + Wheel + Color + Airbags + New + 
+  Turbo
+
+linFit <- lm(model, data=training)
+```
+
+```{r}
+# ols_step_all_possible(linFit) # All possible subset regressions: the number is exponential with p 
+
+# ols_step_best_subset(linFit) # The best subset regression for each p: still exponential with p 
+
+ols_step_forward_p(linFit) # forward based on p-value
+plot(ols_step_forward_p(linFit))
+```
+
+This function builds regression model from a set of candidate predictor variables by entering predictors based on p-values. In the plot we can see how R-square grows exponentially from 0.1 to 0.3 (very low for a model). The same thing happens with the adjusted R-square as it is just adjusting the number of terms in a model (considers and tests different independent variables against the model). C(p) (Mallow's Cp) is used to assess the fit of the regression model that has been estimated. AIC (and SIBC (information criterions) involve information criteria function calculations for the model.
+
+```{r}
+ols_step_forward_aic(linFit) # forward based on AIC
+plot(ols_step_forward_aic(linFit))
+```
+
+In the plot we see the forward ols step based on AIC, were Production year is the most important variable related with the price. This makes sense because through the years, the prices (in general) are under constant change. The fuel information of a car and the gear box type also seems to be important for the price prediction.
+
+```{r}
+ols_step_backward_aic(linFit) # backward AIC
+plot(ols_step_backward_aic(linFit))
+```
+
+With this statistical method, we are able to find the simplest model that explains the data. Unlinlike the forward method, Mileage is the variable that seems to explain better the price of the cars.
+
+```{r}
+ols_step_both_aic(linFit) # stepwise AIC
+plot(ols_step_both_aic(linFit))
+```
+
+With the step wise AIC method, we get similar results as the ones with forward AIC.
+
+```{r}
+linFit <- lm(Price ~ Fuel.idx + Mileage + Prod.year + Levy + Engine.volume + Manufacturer+
+               Model + Category + Cylinders + Leather.interior + Fuel.type +
+               Gear.box.type + Drive.wheels + Wheel + Color + Airbags + New + 
+               Turbo, data=training)
+summary(linFit)
+```
+
+Not a reasonable model.
+
+## Linear Regression
+
+In this case, we will try to consider a new model to see if it's better.
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 5, repeats = 1)
+
+ModelS = Price ~ Prod.year + Mileage + Cylinders + Engine.volume + Gear.box.type + 
+  Fuel.type + Category + Manufacturer
+```
+
+### Train
+
+```{r}
+lm_tune <- train(ModelS, data = training, 
+                 method = "lm", 
+                 preProc=c('scale', 'center'),
+                 trControl = ctrl)
+lm_tune
+```
+
+### Predict
+
+```{r}
+test_results <- data.frame(price = testing$Price)
+
+test_results$lm <- predict(lm_tune, testing)
+postResample(pred = test_results$lm,  obs = test_results$price)
+```
+
+### Visualization
+
+```{r}
+qplot(test_results$lm, test_results$price) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(0, 50500), y = c(0, 50500)) +
+  geom_abline(intercept = 0, slope = 1, colour = "cyan") +
+  theme_bw()
+
+```
+
+After applying this linear regression model, we still observe that we kind of reach the same conclusions, really low correlations!
+
+## Over fitted linear Regression
+
+```{r}
+ModelFF = Price ~ Fuel.idx + Mileage + Prod.year + Levy + Engine.volume + Manufacturer+
+  Model + Category + Cylinders + Leather.interior + Fuel.type +
+  Gear.box.type + Drive.wheels + Wheel + Color + Airbags + New + 
+  Turbo
+```
+
+### Train
+
+```{r}
+alm_tune <- train(ModelFF, data = training, 
+                  method = "lm", 
+                  preProc=c('scale', 'center'),
+                  trControl = ctrl)
+```
+
+### Predict
+
+```{r}
+test_results$alm <- predict(alm_tune, testing)
+postResample(pred = test_results$alm,  obs = test_results$price)
+# even though it is still very low, we can see how the rsquared value has increased
+
+```
+
+### Visualization
+
+```{r}
+qplot(test_results$alm, test_results$price) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(0, 50500), y = c(0, 50500)) +
+  geom_abline(intercept = 0, slope = 1, colour = "cyan") +
+  theme_bw()
+
+```
+
+With the over fitted linear regression model we see that it performs better than with the previous model, as R2 has increased by 0.1 (but this is still very low). However, this model will not generalize well to new data. In other words, it performs well for training data, but when performing on testing data it will perform poorly.
+
+## Forward Regression
+
+### Train
+
+```{r}
+for_tune <- train(ModelFF, data = training, 
+                  method = "leapForward", 
+                  preProc=c('scale', 'center'),
+                  tuneGrid = expand.grid(nvmax = 4:10),
+                  trControl = ctrl)
+
+for_tune
+```
+
+```{r}
+plot(for_tune)
+```
+
+### Predict
+
+```{r}
+# variables that are selected
+coef(for_tune$finalModel, for_tune$bestTune$nvmax)
+
+test_results$frw <- predict(for_tune, testing)
+postResample(pred = test_results$frw,  obs = test_results$price)
+```
+
+### Visualization
+
+```{r}
+qplot(test_results$frw, test_results$price) + 
+  labs(title="Forward Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(0, 50000), y = c(0, 50000)) +
+  geom_abline(intercept = 0, slope = 1, colour = "cyan") +
+  theme_bw()
+```
+
+We can see that the higher the number of predictors, the better the accuracy. But there is no huge difference. Still nothing new for these related models...
+
+## Backward Regression
+
+### Train
+
+```{r}
+back_tune <- train(ModelFF, data = training, 
+                   method = "leapBackward", 
+                   preProc=c('scale', 'center'),
+                   tuneGrid = expand.grid(nvmax = 4:10),
+                   trControl = ctrl)
+back_tune
+```
+
+```{r}
+plot(back_tune)
+```
+
+### Predict
+
+```{r}
+# variables that are selected
+coef(back_tune$finalModel, back_tune$bestTune$nvmax)
+
+test_results$bw <- predict(back_tune, testing)
+postResample(pred = test_results$bw,  obs = test_results$price)
+```
+
+### Visualization
+
+```{r}
+qplot(test_results$bw, test_results$price) + 
+  labs(title="Backward Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(0, 50000), y = c(0, 500000)) +
+  geom_abline(intercept = 0, slope = 1, colour = "cyan") +
+  theme_bw()
+```
+
+We are obtaining very similar conclusions than in forward regression.
+
+## Stepwise Regression
+
+```{r}
+step_tune <- train(ModelFF, data = training, 
+                   method = "leapSeq", 
+                   preProc=c('scale', 'center'),
+                   tuneGrid = expand.grid(nvmax = 4:10),
+                   trControl = ctrl)
+plot(step_tune)
+```
+
+```{r}
+# which variables are selected?
+coef(step_tune$finalModel, step_tune$bestTune$nvmax)
+
+test_results$seq <- predict(step_tune, testing)
+postResample(pred = test_results$seq,  obs = test_results$price)
+```
+
+No conclusions reached with these statistical tools. Nevertheless, we see that in order to reduce the RMSE, the best number of predictors was 9. But still not the numbers we are looking for in RMSE and R2 when talking about the testing set.
+
+## Ridge Regression
+
+```{r}
+# X matrix
+X = model.matrix(ModelFF, data=training)[,-1]  # skip column of ones
+
+# y variable
+y = training$Price
+```
+
+```{r}
+grid = seq(0, .1, length = 100)  # a 100-size grid for lambda (rho in slides)
+ridge.mod = glmnet(X, y, alpha=0, lambda=grid)  # alpha=0 for ridge regression
+
+dim(coef(ridge.mod))
+```
+
+```{r}
+ridge.cv = cv.glmnet(X, y, type.measure="mse", alpha=0)
+plot(ridge.cv)
+```
+
+```{r}
+opt.lambda <- ridge.cv$lambda.min
+opt.lambda
+```
+
+```{r}
+lambda.index <- which(ridge.cv$lambda == ridge.cv$lambda.1se)
+beta.ridge <- ridge.cv$glmnet.fit$beta[, lambda.index]
+beta.ridge
+```
+
+```{r}
+X.test = model.matrix(ModelFF, data=testing)[,-1]  # skip column of ones
+
+ridge.pred = predict(ridge.cv$glmnet.fit, s=opt.lambda, newx=X.test)
+
+y.test = log(testing$Price)
+
+postResample(pred = ridge.pred,  obs = y.test)
+```
+
+In this case we have dealt with another tool to improve our model by selecting the best possible betas. However, we reach the same conclusions when evaluating. Indeed, this is not going to be our final choice. We have used the minimal lambda since it is the most interesting for our purposes.
+
+## With Caret
+
+```{r}
+# the grid for lambda
+ridge_grid <- expand.grid(lambda = seq(0, .1, length = 100))
+
+```
+
+### Train
+
+```{r}
+ridge_tune <- train(ModelFF, data = training,
+                    method='ridge',
+                    preProc=c('scale','center'),
+                    tuneGrid = ridge_grid,
+                    trControl=ctrl)
+plot(ridge_tune)
+```
+
+### Best Tune
+
+```{r}
+ridge_tune$bestTune
+```
+
+### Prediction
+
+```{r}
+test_results$ridge <- predict(ridge_tune, testing)
+
+postResample(pred = test_results$ridge,  obs = test_results$price)
+```
+
+Similar results, with just a little increase on the R2. Again, it is very low.
+
+## Lasso
+
+```{r}
+lasso_grid <- expand.grid(fraction = seq(.01, 1, length = 100))
+```
+
+### Train
+
+```{r}
+lasso_tune <- train(ModelFF, data = training,
+                    method='lasso',
+                    preProc=c('scale','center'),
+                    tuneGrid = lasso_grid,
+                    trControl=ctrl)
+plot(lasso_tune)
+```
+
+### Best Tune
+
+```{r}
+lasso_tune$bestTune
+```
+
+### Prediction
+
+```{r}
+test_results$lasso <- predict(lasso_tune, testing)
+postResample(pred = test_results$lasso,  obs = test_results$price)
+```
+
+With the regularization technique Lasso, we see that we obtain a more accurate prediction as the R2 is 0.3 (but again, this is too low for a model).
+
+## Elastic Net
+
+```{r}
+modelLookup('glmnet')
+
+elastic_grid = expand.grid(alpha = seq(0, .2, 0.01), lambda = seq(0, .1, 0.01))
+```
+
+### Train
+
+```{r}
+glmnet_tune <- train(ModelFF, data = training,
+                     method='glmnet',
+                     preProc=c('scale','center'),
+                     tuneGrid = elastic_grid,
+                     trControl=ctrl)
+plot(glmnet_tune)
+```
+
+### Best Tune
+
+```{r}
+glmnet_tune$bestTune
+```
+
+### Prediction
+
+```{r}
+test_results$glmnet <- predict(glmnet_tune, testing)
+
+postResample(pred = test_results$glmnet,  obs = test_results$price)
+```
+
+As we can see, any of the techniques used above have been useful for improving our linear model approach. The parameters to evaluate the efficiency of the model have remained as in the beginning, although the r-squared has increased by 0.2 (not much though). Therefore, we are going to try different models in order to achieve the best one.
+
+## MACHINE LEARNING TOOLS
+
+### KNN
+
+```{r}
+modelLookup('kknn')
+# 3 hyper-parameters: kmax, distance, kernel
+# kmax: number of neighbors considered
+# distance: parameter of Minkowski distance (p in Lp)
+# kernel: "rectangular" (standard unweighted knn), "triangular", "epanechnikov" (or beta(2,2)), "biweight" (or beta(3,3)), "tri- weight" (or beta(4,4)), "cos", "inv", "gaussian", "rank" and "optimal".
+```
+
+```{r}
+knn_tune <- train(ModelS, 
+                  data = training,
+                  method = "kknn",   
+                  preProc=c('scale','center'),
+                  tuneGrid = data.frame(kmax=c(2,5,8,12),distance=2,kernel='optimal'),
+                  trControl = ctrl)
+plot(knn_tune)
+```
+
+```{r}
+test_results$knn <- predict(knn_tune, testing)
+
+postResample(pred = test_results$knn,  obs = test_results$price)
+```
+
+Computationally, this has been a very expensive process. There is no doubt that it has been profitable since we have decreased the RMSE and improved in nearly 60% the r-squared. This r-squared value is not good enough, but we have also taken into account that these parameters are going to be lower than in classification because the number of possible outcomes is much higher.
+
+### Random Forest
+
+```{r}
+rf_tune <- train(ModelS, 
+                 data = training,
+                 method = "rf",
+                 preProc=c('scale','center'),
+                 trControl = ctrl,
+                 ntree = 100,
+                 tuneGrid = data.frame(mtry=c(1,3,5,7)),
+                 importance = TRUE)
+
+plot(rf_tune)
+```
+
+```{r}
+test_results$rf <- predict(rf_tune, testing)
+```
+
+```{r}
+postResample(pred = test_results$rf,  obs = test_results$price)
+```
+
+```{r}
+# variable importance
+plot(varImp(rf_tune, scale = F), scales = list(y = list(cex = .95)))
+```
+
+Again, it has been a really expensive process, but even more efficient. Random Forest takes into account the most correlated variable, *Prod.year*, as the most important but it also gives importance to others. The RMSE is smaller and the r-squared has increased significantly for our data base. Now we almost have 70% of R2, when we started with10-30% !!
+
+The linear approaches has been improved, as well as the KNN. So far, this has been the best model.
+
+### Gradient Boosting
+
+```{r, results = FALSE,warning=FALSE,message=FALSE}
+xgb_tune <- train(ModelS, 
+                  data = training,
+                  method = "xgbTree",
+                  preProc=c('scale','center'),
+                  objective="reg:squarederror",
+                  trControl = ctrl,
+                  tuneGrid = expand.grid(nrounds = c(10,50), max_depth = c(5,6,7), eta = c(0.01, 0.1, 1),
+                                         gamma = c(1, 2, 3), colsample_bytree = c(1, 2),
+                                         min_child_weight = c(1), subsample = c(0.2,0.5,0.8)))
+
+test_results$xgb <- predict(xgb_tune, testing)
+```
+
+```{r}
+postResample(pred = test_results$xgb,  obs = test_results$price)
+```
+
+As it happened previously, in terms of computation, this process has been really expensive and difficult to overcome random forest. For sure, this is not going to be our model as it is not reliable. Despite the fact that it is a bit better than linear approaches, it is really far from the other machine learning tools.
+
+## Ensemble
+
+```{r}
+apply(test_results[-1], 2, function(x) mean(abs(x - test_results$price)))
+```
+
+```{r}
+# Combination
+test_results$comb = (test_results$alm + test_results$knn + test_results$rf)/3
+
+postResample(pred = test_results$comb,  obs = test_results$price)
+```
+
+Comparing it with other models, and taking into account that our data is not too well correlated, it is not a bad model. However, in this particular case, the model doesn't improve the performance obtained from random forest (best model for our database). It is true that it is very close though. Right now, the only two candidates are random forest and knn, with the highest efficiency (which is pretty similar for both).
+
+## Final predictions
+
+```{r}
+yhat = test_results$comb
+
+head(yhat) # show the prediction for 6 car prices
+
+par(mfrow=c(1,1))
+
+hist(yhat, col="lightblue")
+```
+
+## Prediction intervals
+
+The errors are more symmetric.
+
+```{r}
+y = test_results$price
+error = y-yhat
+hist(error, col="mediumpurple3")
+```
+
+Machine Learning tools don't provide us prediction intervals, but we can split the testing set in two: one for measuring the size of the noise and another for computing the intervals from that size.
+
+Let's consider the first 1000 cars in testing to compute the noise size.
+
+For the prediction intervals we will fix a 90% confidence.
+
+```{r}
+noise = error[1:1000]
+
+lwr = yhat[101:length(yhat)] + quantile(noise,0.05, na.rm=T)
+upr = yhat[101:length(yhat)] + quantile(noise,0.95, na.rm=T)
+
+predictions = data.frame(real=y[101:length(y)], fit=yhat[101:length(yhat)], lwr=lwr, upr=upr)
+
+predictions = predictions %>% mutate(out=factor(if_else(real<lwr | real>upr,1,0)))
+
+# how many real observations are out of the intervals?
+mean(predictions$out==1)
+```
+
+For the performance, we use the last prices in yhat.
+
+In the plot we can see the observations that are out of the intervals.
+
+```{r}
+ggplot(predictions, aes(x=fit, y=real))+
+  geom_point(aes(color=out)) + theme(legend.position="none") +
+  xlim(0, 20000) + ylim(0, 20000)+
+  geom_ribbon(data=predictions,aes(ymin=lwr,ymax=upr),alpha=0.3) +
+  labs(title = "Prediction intervals", x = "prediction",y="real price")
+```
+
+# Conclusion
+
+During this analysis, we have started analyzing the cars data set seeking for relations and tendencies through the years. We have later focused on the 21st Century Cars for a better comparison and understanding of the prices and the pollution of the cars.
+
+We have been able to see relations with the colors of the cars, the different categories, models and manufacturers. Also how the fuel types affect pollution, the relation between cylinders and Levy, the engine volume influence too...However, we have mainly focused on classification and prediction.
+
+After evaluating different approaches, we have created a model for classifying the level of contribution to pollution of a car ("HIGH", "MEDIUM" or "LOW") with a very good accuracy thanks to random forest. On the contrary, despite the dependency on a set of features, decision trees are also helpful when interpreting a model in an easier and faster way. The high value of accuracy is due to the fact that pollution is a variable that we have created at the beginning from other variables and also taking into account CO2 emissions.
+
+For regression, we have seen that the variables, in general, did not explain much of the variation of the *Price*. Through different models, we have seen that the accuracy and the r-squared values were not good at all. But it is remarkable how with random forest we were capable of increasing these values. Although we didn't reach a great r-squared value for the model, we did increase it by a lot, which is a proof of how well random forest performances are, providing much more accurate models.
+
+After evaluating models in classification and regression, we have obtained that random forest is the best model. Taking all the evaluation tools into account, random forest has been by far the one with the best performance. This conclusion is due to the fact that our database is non linear and has very low correlations. As a result, we can say that random forest is one of the best tools for these purpose since it is very precise and can generalize over the data very well. Even if there are a lot of levels from where to choose, it achieves a reasonable accuracy.
+
+![](cayenne.webp)
