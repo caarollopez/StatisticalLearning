@@ -1,0 +1,387 @@
+---
+title: "Case Study: Predicting Airline Delays"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Introduction
+
+On any given day, more than 90,000 flights operate in the US. About one-third of these flights are commercial flights, operated by companies like United, American Airlines, etc. Among these commercial flights, 20% suffer from delays due to various reasons. A certain number of delays are unavoidable, due to unexpected events, but some delays could hopefully be avoided if the factors causing delays are better understood and addressed.
+
+<center>
+
+<img src="flight-delays.jpg" width="500"/>
+
+</center>
+
+<br>
+
+In this case study, we will use a dataset with 9,381 flights that occurred in June-August, 2014 between the three busiest US airports:
+
+-   Atlanta (ATL)
+-   Los Angeles (LAX)
+-   Chicago (ORD)
+
+### The dataset
+
+The dataset AirlineDelay.csv includes the following 23 variables:
+
+-   Flight = the origin-destination pair (LAX-ORD, ATL-LAX, etc.)
+-   Carrier = the carrier operating the flight (American Airlines, Delta Air Lines, etc.)
+-   Month = the month of the flight (June, July, or August)
+-   DayOfWeek = the day of the week of the flight (Monday, Tuesday, etc.)
+-   NumPrevFlights = the number of previous flights taken by this aircraft in the same day
+-   PrevFlightGap = the amount of time between when this flight's aircraft is scheduled to arrive at the airport and when it's scheduled to depart for this flight
+-   HistoricallyLate = the proportion of time this flight has been late historically
+-   InsufficientHistory = whether or not we have enough data to determine the historical record of the flight (equal to 1 if we don't have at least 3 records, equal to 0 if we do)
+-   OriginInVolume = the amount of incoming traffic volume at the origin airport, normalized by the typical volume during the flight's time and day of the week
+-   OriginOutVolume = the amount of outgoing traffic volume at the origin airport, normalized by the typical volume during the flight's time and day of the week
+-   DestInVolume = the amount of incoming traffic volume at the destination airport, normalized by the typical volume during the flight's time and day of the week
+-   DestOutVolume = the amount of outgoing traffic volume at the destination airport, normalized by the typical volume during the flight's time and day of the week
+-   OriginPrecip = the amount of rain at the origin over the course of the day, in tenths of millimeters
+-   OriginAvgWind = average daily wind speed at the origin, in miles per hour
+-   OriginWindGust = fastest wind speed during the day at the origin, in miles per hour
+-   OriginFog = whether or not there was fog at some point during the day at the origin (1 if there was, 0 if there wasn't)
+-   OriginThunder = whether or not there was thunder at some point during the day at the origin (1 if there was, 0 if there wasn't)
+-   DestPrecip = the amount of rain at the destination over the course of the day, in tenths of millimeters
+-   DestAvgWind = average daily wind speed at the destination, in miles per hour
+-   DestWindGust = fastest wind speed during the day at the destination, in miles per hour
+-   DestFog = whether or not there was fog at some point during the day at the destination (1 if there was, 0 if there wasn't)
+-   DestThunder = whether or not there was thunder at some point during the day at the destination (1 if there was, 0 if there wasn't)
+-   TotalDelay = the amount of time the aircraft was delayed, in minutes (this is our dependent variable)
+
+### The goal
+
+Predict the response TotalDelay as a function of the other variables
+
+### Descriptive Analysis
+
+It is always a good idea to separate from the beginning the training set (what the tool is going to see) from the testing set (used only to validate predictions)
+
+```{r}
+library(tidyverse)
+library(MASS)
+library(caret)
+library(e1071) 
+
+# Loading and preparing data
+Airlines <- read.csv("AirlineDelay.csv")
+
+# split between training and testing sets
+spl = createDataPartition(Airlines$TotalDelay, p = 0.8, list = FALSE)  # 80% for training
+
+AirlinesTrain = Airlines[spl,]
+AirlinesTest = Airlines[-spl,]
+
+str(AirlinesTrain)
+
+summary(AirlinesTrain)
+```
+
+Insights?
+
+### Visualization
+
+Add here interesting plots to get information, taking into account the most important variable
+
+```{r}
+ggplot(AirlinesTrain, aes(TotalDelay)) + geom_density(fill="lightblue") + 
+  xlab("TotalDelay") + ggtitle("TotalDelay distribution")
+
+```
+
+Most of the flights have a delay less than 1 min (Q1=0, Q2=1, Q3=18)
+
+Highly assymetric distribution
+
+```{r}
+ggplot(AirlinesTrain, aes(log(TotalDelay+10))) + geom_density(fill="lightblue") + xlab("log(TotalDelay+10)") + ggtitle("TotalDelay distribution")
+```
+
+Seems roughly two groups: one with delays less than 7 min (approx) and the other greater (approx)
+
+Or a second group with center (mode) at 10 min
+
+Moreover, half of the observations have a TotalDelay==0
+
+Should we omit those observations?
+
+```{r}
+# AirlinesTrain = filter(AirlinesTrain, TotalDelay>0)
+# AirlinesTest = filter(AirlinesTest, TotalDelay>0)
+```
+
+Any simple idea to predict delays?
+
+```{r}
+# For instance, we can predict all the new delays as the median delay in the training set
+median(AirlinesTrain$TotalDelay)
+```
+
+We can even add more visual information:
+
+```{r}
+# TotalDelay vs HistoricallyLate
+ggplot(AirlinesTrain, aes(x=HistoricallyLate, y=log(TotalDelay+10))) +
+  geom_point(alpha=0.8) + ggtitle("TotalDelay vs HistoricallyLate")
+# not a clear relation, maybe some non-linearities?
+
+ggplot(AirlinesTrain, aes(log(TotalDelay+10))) + geom_density(aes(group=Flight, colour=Flight, fill=Flight), alpha=0.1) + 
+  ggtitle("TotalDelay distribution")
+# Not so many differences in the 6 flights, but LAX-ATL has less delays
+
+ggplot(AirlinesTrain, aes(log(TotalDelay+10))) + geom_density(aes(group=Carrier, colour=Carrier, fill=Carrier), alpha=0.1) + 
+  ggtitle("TotalDelay distribution")
+# SkyWest Airlines seems to have more delays
+
+ggplot(AirlinesTrain, aes(x=as.factor(NumPrevFlights), y=log(TotalDelay+10))) + geom_boxplot(fill="blue") +
+  ggtitle("TotalDelay vs NumPrevFlights")
+# number of previous flights seems to increase delay, in a monotic but non-linear way
+
+```
+
+Note for categorical variables it is better to use boxplots
+
+For numerical variables, better scatter plots
+
+And even more plots:
+
+```{r}
+featurePlot(x = AirlinesTrain[, c(9:16)],
+            y = log(AirlinesTrain$TotalDelay+10),
+            plot = "scatter",
+            layout = c(4, 2))
+# insights?
+
+featurePlot(x = AirlinesTrain[, c(17:22)],
+            y = log(AirlinesTrain$TotalDelay+10),
+            plot = "scatter",
+            layout = c(2, 3))
+# insights?
+```
+
+# A review of regression
+
+Which are the most correlated variables with Delay?
+
+```{r}
+corr_delay <- sort(cor(AirlinesTrain[,c(5:23)])["TotalDelay",], decreasing = T)
+corr=data.frame(corr_delay)
+ggplot(corr,aes(x = row.names(corr), y = corr_delay)) + 
+  geom_bar(stat = "identity", fill = "lightblue") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "", y = "TotalDelay", title = "Correlations") + 
+  theme(plot.title = element_text(hjust = 0, size = rel(1.5)),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Insights?
+
+Simple regression: try first the most relevant predictor from previous analysis
+
+```{r}
+linFit <- lm(log(TotalDelay+10) ~ HistoricallyLate, data=AirlinesTrain)
+summary(linFit)
+```
+
+Insights?
+
+### Prediction
+
+```{r}
+# Take care: output is in logs
+predictions <- exp(predict(linFit, newdata=AirlinesTest))-10
+cor(AirlinesTest$TotalDelay, predictions)^2
+```
+
+Note the $R^2$ in the testing set is now less than that in the training set. Why?
+
+### Multiple regression
+
+If we include more variables in the model, the prediction accuracy could be improved
+
+Try some multiple regression models and compute performance measures in the testing set
+
+```{r}
+linFit <- lm(log(TotalDelay+10) ~ ., data=AirlinesTrain)
+summary(linFit)
+```
+
+Prediction:
+
+```{r}
+pred.log <- predict(linFit, newdata=AirlinesTest)
+cor(log(AirlinesTest$TotalDelay+10), pred.log)^2
+```
+
+Are these performance measures good enough?
+
+Check also the performance of a naive model
+
+# The classification approach
+
+Let's now divide the Total Delay variable in just three categories:
+
+-   No Delay
+-   Minor Delay
+-   Major Delay
+
+```{r}
+# Create the three groups or categories (labels)
+Airlines$DelayClass = factor(ifelse(Airlines$TotalDelay == 0, "No Delay", ifelse(Airlines$TotalDelay >= 30, "Major Delay", "Minor Delay")))
+levels(Airlines$DelayClass)
+
+```
+
+Is this enough?
+
+```{r}
+Airlines$TotalDelay = NULL
+```
+
+### Some descriptive analysis for classification
+
+```{r}
+# split between training and testing sets
+spl = createDataPartition(Airlines$DelayClass, p = 0.8, list = FALSE)  # 80% for training
+
+AirlinesTrain = Airlines[spl,]
+AirlinesTest = Airlines[-spl,]
+
+table(AirlinesTrain$DelayClass)
+
+```
+
+Are the classes well balanced?
+
+Classes by route (flight):
+
+```{r}
+table(AirlinesTrain$DelayClass, AirlinesTrain$Flight)
+
+ggplot(AirlinesTrain, aes(x=DelayClass,fill = Flight)) + geom_bar()
+
+ggplot(AirlinesTrain, aes(x=Flight,fill = DelayClass)) + geom_bar()
+```
+
+# Bayes Classifiers
+
+## LDA
+
+```{r}
+lda.model <- lda(DelayClass ~ ., data=AirlinesTrain, prior = c(1/6, 1/3, 1/2))
+
+lda.model
+```
+
+Note there are two linear classifiers because we have 3 groups
+
+Note prior = c(1/6, 1/3, 1/2) are roughly the class proportions for the training set, hence it's equivalent to
+
+```{r}
+lda.model <- lda(DelayClass ~ ., data=AirlinesTrain)
+```
+
+In practice, a bit better performance is attained if we shrink the prior probabilities towards 1/3
+
+Output: posterior probabilities
+
+```{r}
+probability = predict(lda.model, newdata=AirlinesTest)$posterior
+head(probability)
+```
+
+To predict the labels for delay, we apply the Bayes rule of maximum probability
+
+```{r}
+prediction <- max.col(probability)
+head(prediction)
+```
+
+which is equivalent to
+
+```{r}
+prediction = predict(lda.model, newdata=AirlinesTest)$class
+head(prediction)
+```
+
+## Performance
+
+The confusion matrix: predictions in rows, true values in columns (but we can change the order)
+
+```{r}
+confusionMatrix(prediction, AirlinesTest$DelayClass)$table
+confusionMatrix(prediction, AirlinesTest$DelayClass)$overall[1]
+```
+
+## QDA
+
+```{r}
+qda.model <- qda(DelayClass ~ ., data=AirlinesTrain, prior = c(1/6, 1/3, 1/2))
+qda.model
+```
+
+Performance:
+
+```{r}
+prediction = predict(qda.model, newdata=AirlinesTest)$class
+confusionMatrix(prediction, AirlinesTest$DelayClass)$table
+confusionMatrix(prediction, AirlinesTest$DelayClass)$overall[1]
+```
+
+## A benchmark model
+
+What is the accuracy on a benchmark model that predicts the most frequent outcome (No Delay) for all observations?
+
+```{r}
+table(AirlinesTrain$DelayClass)
+obs <- max(table(AirlinesTest$DelayClass))
+# Accuracy:
+obs/nrow(AirlinesTest)
+```
+
+Note the benchmark is not so bad... Too much noise...
+
+We can reduce the noise, or increase the accuracy by considering just two classes: delay or no delay
+
+But the information (or precision) of the output will be weaker or less practical...
+
+```{r}
+Airlines$DelayClass = factor(ifelse(Airlines$DelayClass == "No Delay", "No Delay", "Delay"))
+levels(Airlines$DelayClass)
+
+AirlinesTrain = Airlines[spl,]
+AirlinesTest = Airlines[-spl,]
+
+table(AirlinesTrain$DelayClass)
+```
+
+Very well-balanced classes
+
+```{r}
+lda.model <- lda(DelayClass ~ ., data=AirlinesTrain)
+prediction = predict(lda.model, newdata=AirlinesTest)$class
+confusionMatrix(prediction, AirlinesTest$DelayClass)$table
+confusionMatrix(prediction, AirlinesTest$DelayClass)$overall[1]
+```

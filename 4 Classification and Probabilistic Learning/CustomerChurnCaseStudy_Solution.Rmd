@@ -1,0 +1,785 @@
+---
+title: "Case Study: Customer Analytics"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Motivation
+
+Customer churn: a customer (player, subscriber, user, etc.) ends his or her relationship with a company
+
+High cost of churn for telco and banking companies: lost revenue and marketing costs involved with replacing those customers with new ones (who are difficult to gain)
+
+It is more difficult and expensive to acquire a new customer than it is to retain a current one
+
+Hence, reducing churn is a key business goal for many companies
+
+In this case study, our **objective** will be to predict customer churn in a Telco company while explaining what features relate to customer churn, i.e. the company needs to understand who is leaving and why
+
+Moreover, we will predict whether is at a high risk of churning and who are customers providing more income to the company than others: **risk learning**
+
+<center>
+
+<img src="churn.png" width="400"/>
+
+</center>
+
+<br>
+
+### Available Data
+
+Dataset from IBM Watson Telco Dataset: <https://www.ibm.com/communities/analytics/watson-analytics-blog/guide-to-sample-datasets/>
+
+This telco company is concerned about the number of customers leaving their landline business for cable competitors
+
+### Load useful libraries
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(forcats)
+library(VIM)
+library(GGally)
+library(MASS)
+library(caret)
+library(randomForest)
+library(gbm)
+library(neuralnet)
+```
+
+# Load and explore the data set
+
+```{r}
+churnData <- read.csv('ChurnData.csv', stringsAsFactors=T)
+
+glimpse(churnData)
+```
+
+The dataset includes information about:
+
+-   Customers who left within the last month: The column is called Churn
+
+-   Services that each customer has signed up for: phone, multiple lines, internet, online security, online backup, device protection, tech support, and streaming TV and movies
+
+-   Customer account information: how long they have been a customer, contract, payment method, paperless billing, monthly charges, and total charges
+
+-   Demographic info about customers: gender, age range, and if they have partners and dependents
+
+Summary:
+
+```{r}
+summary(churnData)
+```
+
+### Some exploratory analysis
+
+```{r}
+aggr(churnData, numbers = TRUE, sortVars = TRUE, labels = names(churnData),
+     cex.axis = .5, gap = 1, ylab= c('Missing data','Pattern'))
+```
+
+11 NAs in TotalCharges, what to do?
+
+```{r, include=F}
+# Insert your code here
+
+churnData <- churnData %>%  dplyr::select(-customerID) %>% drop_na()
+```
+
+Make some descriptive analysis
+
+```{r}
+# Insert your code here
+
+table(churnData$Churn)
+prop.table(table(churnData$Churn))
+```
+
+26% of customers left the company in the last month
+
+### Some feature engineering
+
+We will change "No internet service to "No" for columns:
+
+"OnlineSecurity", "OnlineBackup", "DeviceProtection", "TechSupport", "streamingTV", "streamingMovies"
+
+Moreover, we will change "No phone service" to "No" for column "MultipleLines"
+
+```{r, include=F}
+for(i in c(9:14)) {
+  churnData[,i] <- fct_collapse(churnData[,i], No = c("No","No internet service"))
+}
+
+churnData$MultipleLines <- fct_collapse(churnData$MultipleLines, No = c("No","No phone service"))
+```
+
+# Data splitting
+
+```{r}
+in_train <- createDataPartition(churnData$Churn, p = 0.8, list = FALSE)  # 80% for training
+training <- churnData[ in_train,]
+testing <- churnData[-in_train,]
+nrow(training)
+nrow(testing)
+```
+
+## Some descriptive analysis using the training set
+
+```{r}
+# Insert your code here
+
+# Numeric vs categorical plot:
+ggplot(training, aes(x=Churn, y=tenure)) +  geom_boxplot(fill="blue") 
+# customers with more months with the company have less chances to leave
+
+# The same, different view:
+ggplot(training, aes(tenure)) + geom_density(aes(group=Churn, colour=Churn, fill=Churn), alpha=0.1) +xlab("tenure")
+# customers with less than 2 years in the company tend to leave more
+# customers with more than 5 years in the company tend to stay
+
+# Numeric vs categorical plot:
+ggplot(training, aes(MonthlyCharges)) + geom_density(aes(group=Churn, colour=Churn, fill=Churn), alpha=0.1) +xlab("Monthly charges")
+# customers paying less than 30/month tend to stay
+# those paying more than 60/month tend to leave more
+```
+
+```{r}
+# Insert your code here
+
+# Categorical vs categorical
+# Three views:
+table(training$Churn, training$Contract)
+
+ggplot(training, aes(x=Churn,fill = Contract)) + geom_bar()
+
+ggplot(training, aes(x=Contract,fill = Churn)) + geom_bar()
+# a long-term contract (1-2 years) decreases chance of leaving
+
+# More categorical vs categorical
+
+ggplot(training, aes(x=Churn,fill = OnlineSecurity)) + geom_bar()
+
+ggplot(training, aes(x=Churn,fill = InternetService)) + geom_bar()
+
+# easy ways to see relationships with categorical variables
+
+```
+
+```{r}
+# Insert your code here
+
+ggcorr(training, label = T)
+```
+
+There are some variables with high correlations; should skip them
+
+```{r, include=F}
+training$TotalCharges = NULL
+testing$TotalCharges = NULL
+```
+
+# The Benchmark
+
+We have many predictors, hence our benchmark will be penalized logistic regression
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 5,
+                     classProbs = TRUE, 
+                     verboseIter=T)
+
+# We have many predictors, hence use penalized logistic regression
+lrFit <- train(Churn ~ ., 
+               method = "glmnet",
+               tuneGrid = expand.grid(alpha = seq(0, 1, 0.1), lambda = seq(0, .1, 0.02)),
+               metric = "Kappa",
+               data = training,
+               preProcess = c("center", "scale"),
+               trControl = ctrl)
+print(lrFit)
+lrPred = predict(lrFit, testing)
+confusionMatrix(lrPred, testing$Churn)
+```
+
+Accuracy around 80%, but not the best performance measure here. Why?
+
+Kappa around 0.46, not bad but it should be improved
+
+### Variable importance
+
+```{r}
+lr_imp <- varImp(lrFit, scale = F)
+plot(lr_imp, scales = list(y = list(cex = .95)))
+```
+
+### The ROC curve
+
+The ROC curve shows true positives vs false positives in relation with different thresholds
+
+-   y-axis = Sensitivity (TP)
+
+-   x-axis = Specificity (1-FP)
+
+```{r}
+library(pROC)
+lrProb = predict(lrFit, testing, type="prob")
+
+plot.roc(testing$Churn, lrProb[,2],col="darkblue", print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", print.thres=TRUE)
+```
+
+Very convenient to plot ROC by groups (factors)
+
+```{r}
+plot.roc(testing$Churn[testing$SeniorCitizen == "0"], lrProb[testing$SeniorCitizen == "0",2],print.auc = TRUE, col = "blue", print.auc.col = "blue",print.auc.y = 0.98, print.auc.x = 0.6)
+plot.roc(testing$Churn[testing$SeniorCitizen == "1"], lrProb[testing$SeniorCitizen == "1",2],add=T,print.auc = TRUE, col = "green", print.auc.col = "green",print.auc.y = 0.7, print.auc.x = 0.8)
+
+```
+
+Let's use the threshold from the ROC curve
+
+```{r}
+threshold = 0.3
+lrProb = predict(lrFit, testing, type="prob")
+lrPred = rep("No", nrow(testing))
+lrPred[which(lrProb[,2] > threshold)] = "Yes"
+confusionMatrix(factor(lrPred), testing$Churn)
+```
+
+Note the trade-off between false negatives and false positives is much better, but also note accuracy and kappa have been worsened
+
+# Cost-sensitive learning
+
+Features increasing chances of leaving:
+
+-   Tenure (especially \< 12 Months)
+-   Internet Service = Fiber Optic
+-   Payment Method = Electronic Check
+
+Features decreasing chances of leaving:
+
+-   Contract = two ear
+-   Total/monthly charges
+
+Accuracy is ok, around 80%. But are the two errors equally important?
+
+The company will be concerned with balancing:
+
+-   the cost of a customer who is leaving and has not been targeted,
+
+-   the cost of inadvertently targeting customers that are not planning to leave
+
+Usually, the first cost (associated with false negatives) is the most dangerous for the company
+
+Hence, how can we reduce that cost (at the expense of increasing the other cost)?
+
+Assume the following (company's data):
+
+-   Cost of true negatives is 0: the model is correctly identified a happy customer, no need to offer discounts
+
+-   Cost of false negatives is 500 (customer value): most problematic error, we lose the customer
+
+-   Cost of false positives is 100: retention incentive
+
+-   Cost of true positives is 140: (1-gamma)\*(customer value) + gamma\*(retention incentive)
+
+where gamma=probability a custommer accepts the incentive/offer, 0.9 in our case
+
+Cost matrix:
+
+| Prediction/Reference |  no | yes |
+|----------------------|----:|----:|
+| predicted no         |   0 | 500 |
+| predicted yes        | 100 | 140 |
+
+Unit cost is then:
+
+0\*TN + 100\*FP + 500\*FN + 140\*TP
+
+```{r}
+# Type the unit cost here:
+
+cost.unit <- c(0, 100, 500, 140)
+```
+
+### Cost of Naive classifier
+
+Unit cost for Naive classifier (no analytics knowledge)
+
+cost = 0\*.74 + 100\*0 + 500\*.26 + + 140\*0 = 130eur/customer on average
+
+Savings = (retention incentive - cost)
+
+in the case of the naive classifier, the savings = -30eur/customer, i.e. a loss
+
+Savings from the benchmark (that needs analytics knowledge)
+
+```{r}
+CM = confusionMatrix(factor(lrPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+Savings per customer around 20 eur, i.e. 50 eur better than the naive
+
+## Cost-sensitive classifier (expert level)
+
+```{r}
+cost.i = matrix(NA, nrow = 100, ncol = 10)
+# 20 replicates for training/testing sets for each of the 10 values of threshold
+
+j <- 0
+for (threshold in seq(0.05,0.5,0.05)){
+  
+  j <- j + 1
+  cat(j)
+  for(i in 1:100){
+    
+    # partition data intro training (75%) and testing sets (25%)
+    d <- createDataPartition(training$Churn, p = 0.8, list = FALSE)
+    # select training sample
+    
+    train <- churnData[d,]
+    test  <- churnData[-d,]  
+    
+    lrFit <- train(Churn ~ ., data=train, method = "glmnet",
+                   tuneGrid = data.frame(alpha = 0.3, lambda = 0), preProcess = c("center", "scale"),
+                   trControl = trainControl(method = "none", classProbs = TRUE))
+    
+    lrProb = predict(lrFit, test, type="prob")
+    lrPred = rep("No", nrow(test))
+    lrPred[which(lrProb[,2] > threshold)] = "Yes"
+    
+    CM = confusionMatrix(factor(lrPred), test$Churn)$table
+    cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+    cost
+    
+    cost.i[i,j] <- cost
+    
+  }
+}
+
+# Threshold optimization:
+boxplot(cost.i, main = "Threshold selection",
+        ylab = "unit cost",
+        xlab = "threshold value",
+        names = seq(0.05,0.5,0.05),col="royalblue2",las=2)
+
+# values around 0.2 are reasonable
+apply(cost.i, 2, median)
+```
+
+Savings around 20eur/customer on average
+
+Can you imagine the savings with just 100,000 customers?
+
+Final prediction:
+
+```{r}
+threshold = 0.2
+lrFit <- train(Churn ~ ., data=training, method = "glmnet",
+               tuneGrid = data.frame(alpha = 0.3, lambda = 0), preProcess = c("center", "scale"),
+               trControl = trainControl(method = "none", classProbs = TRUE))
+lrProb = predict(lrFit, testing, type="prob")
+lrPred = rep("No", nrow(testing))
+lrPred[which(lrProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(lrPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+# Risk learning
+
+There are customers who provide more income to the company than others
+
+Hence, we should focus on them if their churn probability is high
+
+Money at risk:
+
+```{r}
+Risk.customer.year=testing$MonthlyCharges*lrProb[,2]*12
+hist(Risk.customer.year,col="lightblue")
+```
+
+We should focus on customers with money.at.risk \> 500 eur
+
+```{r}
+sum(Risk.customer.year>500)/length(Risk.customer.year)
+```
+
+Around 20% of customers would incur high losses, but who are they?
+
+```{r}
+sort.risk = sort(Risk.customer.year,decreasing=T,index.return=T)
+
+# Most risky positions:
+head(sort.risk$x)
+# Most risky customers:
+head(sort.risk$ix)
+```
+
+We can then offer risky customers a discount or better service, etc.
+
+# Machine Learning tools
+
+## Decision trees
+
+By default, rpart() function uses the Gini impurity measure to split the nodes and early stopping (pre-pruning)
+
+```{r}
+library(rpart)
+
+# Hyper-parameters
+control = rpart.control(minsplit = 30, maxdepth = 10, cp=0.01)
+
+# minsplit: minimum number of observations in a node before before a split
+# maxdepth: maximum depth of any node of the final tree
+# cp: degree of complexity, the smaller the more branches
+
+```
+
+A decision tree
+
+```{r}
+model = Churn ~.
+dtFit <- rpart(model, data=training, method = "class", control = control)
+summary(dtFit)
+```
+
+For each node in the tree, the number of examples reaching the decision point is listed
+
+But better to visusalize decision trees:
+
+```{r}
+library(rpart.plot)
+rpart.plot(dtFit, digits=3)
+```
+
+Each node shows:
+
+-   the predicted class
+-   the predicted probability of each class
+-   the percentage of observations in the node
+
+Note many nodes have been removed (pruning)
+
+To create a full tree, we can set the complexity parameter cp to 0 (split even if it does not improve the tree) and we set the minimum number of observations in a node needed to split to the smallest value of 2
+
+```{r}
+control = rpart.control(minsplit = 40, maxdepth = 12, cp=0.001)
+dtFit <- rpart(model, data=training, method = "class", control = control)
+
+rpart.plot(dtFit, digits = 3)
+# the plot is time consuming
+```
+
+### Prediction:
+
+```{r}
+dtPred <- predict(dtFit, testing, type = "class")
+
+dtProb <- predict(dtFit, testing, type = "prob")
+threshold = 0.2
+dtPred = rep("No", nrow(testing))
+dtPred[which(dtProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(dtPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+### Now using Caret
+
+```{r}
+library(caret)
+
+caret.fit <- train(model, 
+                   data = training, 
+                   method = "rpart",
+                   control=rpart.control(minsplit = 40, maxdepth = 12),
+                   trControl = trainControl(method = "cv", number = 5),
+                   tuneLength=10)
+caret.fit
+```
+
+Visualization
+
+```{r}
+rpart.plot(caret.fit$finalModel)
+
+```
+
+Prediction
+
+```{r}
+dtProb <- predict(caret.fit, testing, type = "prob")
+threshold = 0.2
+dtPred = rep("No", nrow(testing))
+dtPred[which(dtProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(dtPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+## Random Forest
+
+Using the randomForest library
+
+```{r}
+rf.train <- randomForest(Churn ~., data=training,                      ntree=200,mtry=10,cutoff=c(0.75,0.25),importance=TRUE, do.trace=T)
+
+# mtry: number of variables randomly sampled as candidates at each split
+# ntree: number of trees to grow
+# cutoff: cutoff probabilities in majority vote
+```
+
+Prediction
+
+```{r}
+rf.pred <- predict(rf.train, newdata=testing)
+confusionMatrix(rf.pred, testing$Churn)
+```
+
+Let's optimize now the hyper-parameters using Caret with a specific loss
+
+Define first the specific function for the cost:
+
+```{r}
+EconomicCost <- function(data, lev = NULL, model = NULL) 
+{
+  y.pred = data$pred 
+  y.true = data$obs
+  CM = confusionMatrix(y.pred, y.true)$table
+  out = sum(as.vector(CM)*cost.unit)/sum(CM)
+  names(out) <- c("EconomicCost")
+  out
+}
+```
+
+Now include this function in the Caret control:
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 5,
+                     classProbs = TRUE, 
+                     summaryFunction = EconomicCost,
+                     verboseIter=T)
+```
+
+For example, this is the cost with the previous prediction
+
+```{r}
+EconomicCost(data = data.frame(pred  = rf.pred, obs = testing$Churn))
+
+```
+
+Now train a RF using Caret with the specific metric:
+
+```{r}
+rf.train <- train(Churn ~., 
+                  method = "rf", 
+                  data = training,
+                  preProcess = c("center", "scale"),
+                  ntree = 200,
+                  cutoff=c(0.7,0.3),
+                  tuneGrid = expand.grid(mtry=c(6,8,10)), 
+                  metric = "EconomicCost",
+                  maximize = F,
+                  trControl = ctrl)
+```
+
+Variable importance:
+
+```{r}
+rf_imp <- varImp(rf.train, scale = F)
+plot(rf_imp, scales = list(y = list(cex = .95)))
+```
+
+Prediction:
+
+```{r}
+rfPred = predict(rf.train, newdata=testing)
+CM = confusionMatrix(factor(rfPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+Sometimes, the threshold in the Bayes rule is more important than hyper-parameters in the ML tools:
+
+```{r}
+threshold = 0.2
+rfProb = predict(rf.train, newdata=testing, type="prob")
+rfPred = rep("No", nrow(testing))
+rfPred[which(rfProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(rfPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+## Gradient Boosting
+
+First using the gbm library
+
+```{r}
+GBM.train <- gbm(ifelse(training$Churn=="No",0,1) ~., data=training, distribution= "bernoulli",n.trees=250,shrinkage = 0.01,interaction.depth=2,n.minobsinnode = 8)
+
+```
+
+Prediction and cost
+
+```{r}
+threshold = 0.2
+gbmProb = predict(GBM.train, newdata=testing, n.trees=250, type="response")
+gbmPred = rep("No", nrow(testing))
+gbmPred[which(gbmProb > threshold)] = "Yes"
+CM = confusionMatrix(factor(gbmPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+It works better, but better than Logistic Regression?
+
+Let's try now xgboost with Caret. Define first a grid for the hyperparameters:
+
+```{r}
+xgb_grid = expand.grid(
+  nrounds = c(500,1000),
+  eta = c(0.01, 0.001), # c(0.01,0.05,0.1)
+  max_depth = c(2, 4, 6),
+  gamma = 1,
+  colsample_bytree = c(0.2, 0.4),
+  min_child_weight = c(1,5),
+  subsample = 1
+)
+```
+
+Then, train
+
+```{r}
+xgb.train = train(Churn ~ .,  data=training,
+                  trControl = ctrl,
+                  metric="EconomicCost",
+                  maximize = F,
+                  tuneGrid = xgb_grid,
+                  preProcess = c("center", "scale"),
+                  method = "xgbTree"
+)
+```
+
+Variable importance:
+
+```{r}
+xgb_imp <- varImp(xgb.train, scale = F)
+plot(xgb_imp, scales = list(y = list(cex = .95)))
+```
+
+Prediction and cost
+
+```{r}
+threshold = 0.2
+xgbProb = predict(xgb.train, newdata=testing, type="prob")
+xgbPred = rep("No", nrow(testing))
+xgbPred[which(xgbProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(xgbPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+Better but we need to improve the grid: too expensive
+
+# Other ideas
+
+## More specific costs
+
+Instead of using a fixed cost matrix for all the customers, we could consider a different matrix for each, depending on the value of each customer for the company
+
+## Subsampling techniques
+
+**down-sampling:** randomly subset all the classes in the training set so that their class frequencies match the least prevalent class
+
+**up-sampling:** randomly sample (with replacement) the minority class to be the same size as the majority class
+
+**hybrid methods:** techniques such as SMOTE and ROSE down-sample the majority class and synthesize new data points in the minority class
+
+Select your choice:
+
+```{r}
+ctrl$sampling <- "up"
+#ctrl$sampling <- "rose"
+#ctrl$sampling <- "smote"
+```
+
+Train any model with subsampling
+
+```{r}
+rf.train <- train(Churn ~., 
+                  method = "rf", 
+                  data = training,
+                  preProcess = c("center", "scale"),
+                  ntree = 200,
+                  cutoff=c(0.7,0.3),
+                  tuneGrid = expand.grid(mtry=c(6,8,10)), 
+                  importance=TRUE,
+                  metric = "EconomicCost",
+                  maximize = F,
+                  trControl = ctrl)
+```
+
+Prediction and cost
+
+```{r}
+threshold = 0.2
+rfProb = predict(rf.train, newdata=testing, type="prob")
+rfPred = rep("No", nrow(testing))
+rfPred[which(rfProb[,2] > threshold)] = "Yes"
+CM = confusionMatrix(factor(rfPred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost 
+```
+
+Some improvement, but note each improvement is marginal...
+
+## Basic ensembles
+
+**Ensemble learning:** combine the best classifiers and form a meta-classifier
+
+This is quite computationally expensive if cost-sensitive learning is taken into account
+
+Create ensemble for classification: mode function
+
+```{r}
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+Prediction
+
+```{r}
+ensemble.pred = apply(data.frame(lrPred, xgbPred, rfPred), 1, mode) 
+CM = confusionMatrix(factor(ensemble.pred), testing$Churn)$table
+cost = sum(as.vector(CM)*cost.unit)/sum(CM)
+cost
+```
+
+Take care: ensemble models work better after adding more and better predictions...

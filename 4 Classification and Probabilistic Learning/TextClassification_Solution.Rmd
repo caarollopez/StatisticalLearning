@@ -1,0 +1,381 @@
+---
+title: "Case Study: Text Classification"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2021'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Building a Spam Filter
+
+<br>
+
+**Goal:** build a spam filter to classify incoming mail as either *spam* or *ham*
+
+### Available Data
+
+Dataset from the Center for Machine Learning and Intelligent Systems at the University of California, Irvine
+
+-   Source: <https://archive.ics.uci.edu/ml/machine-learning-databases/00228/smsspamcollection.zip>
+
+This dataset consists of 5574 observations of 2 variables
+
+The first variable is the content of the emails and the second variable the target variable
+
+### Load useful libraries
+
+```{r}
+library(tidyverse)
+library(tm)
+library(wordcloud)
+library(SnowballC)
+library(caret)
+library(e1071)
+library(naivebayes)
+```
+
+# Load and explore the data set
+
+```{r}
+text <- read.delim("SMSSpamCollection.csv", sep="\t", header=F, colClasses="character", quote="")
+
+head(text)
+
+text = text %>% rename(type=V1, text=V2)
+
+text$type = text$type %>% factor
+
+prop.table(table(text$type))
+```
+
+Note most of the emails are not spam
+
+### Descriptive analysis: the wordcloud
+
+Global wordcloud:
+
+```{r}
+# Global wordcloud
+wordcloud(text$text, max.words = 100, random.order = FALSE,
+          colors=brewer.pal(8, "Dark2"))
+```
+
+Wordcloud for spam messages:
+
+```{r}
+# Wordcloud for spam messages
+spam <- subset(text, type == "spam")
+wordcloud(spam$text, max.words = 100, random.order = FALSE,
+          colors=brewer.pal(8, "Dark2"), main = "spam")  
+```
+
+Wordcloud for ham messages:
+
+```{r}
+# Wordcloud for ham messages
+ham <- subset(text, type != "spam")
+wordcloud(ham$text, max.words = 100, random.order = FALSE,
+          colors=brewer.pal(8, "Dark2"), main = "ham")
+```
+
+Any difference?
+
+### The data matrix: from text to numbers
+
+Our data matrix is going to be a **Document Term Matrix:** documents in rows, words (corpus) in columns
+
+Each element in the matrix contains the number of times a word appear in a document
+
+Moreover, we need some transformations: the words in lowercase, remove numbers and stops words, punctuation, etc.
+
+```{r}
+text_corpus <- VCorpus(VectorSource(text$text))
+
+X <- DocumentTermMatrix(text_corpus,
+                        control = list(
+                          tolower = TRUE,
+                          removeNumbers = TRUE,
+                          stopwords = TRUE,
+                          removePunctuation = TRUE,
+                          stemming = TRUE
+                        ))
+
+X
+dim(X)
+
+inspect(X[1:10, 1000:1010])
+
+```
+
+There are 5574 emails
+
+Dimension is too high, we need to reduce it, otherwise dataset will be too noisy
+
+There is a word that appears 657 times (call), but most of the words appear less than once
+
+Hence, include only words that appear at least 40 times in the dataset
+
+Take care: this can by an hyper-parameter...
+
+```{r}
+# choose one of these two:
+freq_words <- findFreqTerms(X, 40)
+#X = removeSparseTerms(X, 0.999)
+
+X = X[, freq_words]
+X
+```
+
+Dimension is still high (218), this is why we will use Naive Bayes to train the tool
+
+# Train and test split
+
+We will train the models with 80% of the dataset and test them with the remaining 20%
+
+```{r}
+index=createDataPartition(text$type,p=0.8,list=FALSE)
+X.train=X[index,]
+X.test=X[-index,]
+y.train=text[index,]$type
+y.test=text[-index,]$type
+```
+
+# Naive-Bayes classification
+
+### Standard version (Gaussian)
+
+The standard naive Bayes classifier (in e1071::naiveBayes) assumes independence of the predictor variables, and Gaussian distribution (given the target class) of metric predictors.
+
+This is the standard, assuming Gaussian distribution in predictors
+
+```{r}
+NB.fit <- naiveBayes(as.matrix(X.train), y.train, laplace = 1) # laplace controls smoothing of probabilities
+NB.pred <- predict(NB.fit, as.matrix(X.test))
+#confusion matrix
+confusionMatrix(NB.pred,y.test)
+```
+
+Accuracy is just over 40%, very poor for this promising tool...
+
+We can also consider probabilities as output, although they are not reliable, take care!
+
+```{r}
+NB.prob <- predict(NB.fit, as.matrix(X.test),type="raw")
+
+head(NB.prob)
+hist(NB.prob)
+```
+
+Note probabilities are extreme!
+
+### Standard (Gaussian) with binary predictors
+
+Let's try now the same naive Bayes, but with binary predictors (and again assuming Gaussian distribution)
+
+```{r}
+convert_counts <- function(x) {
+x <- ifelse(x > 0, "Yes", "No")
+}
+
+X.train.bin = apply(X.train, MARGIN = 2, convert_counts)
+X.test.bin = apply(X.test, MARGIN = 2, convert_counts)
+
+NB.fit <- naiveBayes(X.train.bin, y.train, laplace = 1) # laplace controls smoothing of probabilities
+NB.pred <- predict(NB.fit, X.test.bin)
+
+#confusion matrix
+confusionMatrix(NB.pred,y.test)
+
+```
+
+Now, accuracy in testing set is over 95%, that's a lot!
+
+### Multinomial version
+
+Multinomial Naive Bayes model (from naivebayes package): all class conditional distributions are assumed to be multinomial and independent
+
+```{r}
+NB.fit <- multinomial_naive_bayes(as.matrix(X.train), y.train, laplace=.6)
+NB.pred <- predict(NB.fit, as.matrix(X.test))
+
+NB.prob <- predict(NB.fit, as.matrix(X.test),type="prob")
+hist(NB.prob)
+
+#confusion matrix
+confusionMatrix(NB.pred,y.test)
+```
+
+Now, accuracy in testing set is over 95%, that's a lot!
+
+Probabilities are not as extreme as before
+
+### Bernoulli version
+
+Bernoulli Naive Bayes model (from naivebayes package): all class conditional distributions are assumed to be Bernoulli and independent
+
+```{r}
+NB.fit <- bernoulli_naive_bayes(as.matrix(X.train), y.train, laplace=0.2)
+NB.pred <- predict(NB.fit, as.matrix(X.test))
+
+NB.prob <- predict(NB.fit, as.matrix(X.test),type="prob")
+hist(NB.prob)
+
+#confusion matrix
+confusionMatrix(NB.pred,y.test)
+```
+
+A bit better...
+
+# With Caret
+
+Highly recommended package
+
+-   to evaluate performance and calibrate sensitive parameters
+
+-   to choose the best model across these parameters
+
+-   to estimate model performance from a training set
+
+-   Main function: train()
+
+tidymodels is the tidy version of caret (collection of packages for modelling)
+
+These are the models for regression and classification:
+
+```{r}
+names(getModelInfo()) 
+```
+
+Each model can be automatically tuned and evaluated
+
+Example: use 5 repeats of 10-fold cross validation
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", 
+                     repeats = 5,
+                     number = 10)
+```
+
+We can also choose bootstrap, LOOCV, etc.
+
+If we want to fix the hyper-parameters (no tuning), then no trainControl is needed
+
+```{r}
+trctrl <- trainControl(method = "none")
+
+X.train = X.train %>% as.matrix() %>% as.data.frame()
+X.test = X.test %>% as.matrix() %>% as.data.frame()
+X.train.bin = X.train.bin %>% as.matrix() %>% as.data.frame()
+X.test.bin = X.test.bin %>% as.matrix() %>% as.data.frame()
+```
+
+## The train function
+
+This function sets up a grid of tuning parameters for a number of classification and regression routines, fits each model and calculates a resampling based performance measure
+
+In our example, the first model will be the naive_bayes model from the naivebayes package, where we fix hyper-parameters
+
+Take care: the multinomial naive bayes is not implemented in caret
+
+```{r}
+nb_mod <- train(x = X.train.bin,
+                y = y.train,
+                method = "naive_bayes",
+                trControl = trctrl,
+                tuneGrid = data.frame(laplace = 0.5,
+                                      usekernel = FALSE,
+                                      adjust = FALSE))
+
+nb_pred <- predict(nb_mod,
+                   newdata = X.test.bin)
+
+confusionMatrix(nb_pred,y.test)
+```
+
+## Tuning
+
+Let's try 10-fold cross validation
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", 
+                     repeats = 1,
+                     number = 10,
+                     verboseIter = T)
+```
+
+Define now the tuning grid:
+
+```{r}
+nb_grid <-   expand.grid(usekernel = c(TRUE, FALSE),
+                         laplace = c(0, 0.5, 1), 
+                         adjust = c(0.5, 1, 1.5))
+```
+
+```{r}
+nb_mod <- train(x = X.train.bin,
+                y = y.train,
+                method = "naive_bayes",
+                trControl = ctrl,
+                tuneGrid = nb_grid)
+
+nb_pred <- predict(nb_mod,
+                   newdata = X.test.bin)
+
+confusionMatrix(nb_pred,y.test)
+```
+
+Visualize the tuning process:
+
+```{r}
+plot(nb_mod)
+```
+
+Not too much gain here, but in practice a good tuning makes a difference!
+
+Are the two classification errors well balanced?
+
+```{r}
+plot(confusionMatrix(nb_pred,y.test)[["table"]])
+```
+
+## Other methods are easy to use
+
+The second model will be the svmLinearWeights2 model from the LiblineaR package, where we fix hyper-parameters
+
+```{r}
+svm_grid <-   expand.grid(cost = c(1, 2, 3),
+                         Loss = c(0.2, 0.5, 0.8), 
+                         weight = c(0.5, 1, 1.5))
+
+svm_mod <- train(x = X.train,
+                 y = y.train,
+                 method = "svmLinearWeights2",
+                 trControl = ctrl,
+                 tuneGrid = svm_grid)
+
+svm_pred <- predict(svm_mod,
+                    newdata = X.test)
+
+confusionMatrix(svm_pred,y.test)
+```
+
+We can improve the results by trying more models and doing some hyper-parameter tuning, but with Caret is easy...

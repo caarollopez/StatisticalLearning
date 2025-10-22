@@ -1,0 +1,896 @@
+---
+title: "Case Study: Home Price Prediction"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2021'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Motivation
+
+In this computer lab we are going to develop analytical models to predict the final prices for homes
+
+And also: can we find the most important variables affecting prices?
+
+In that way, we can
+
+-   Detect better opportunities
+
+-   Understand better the real state market
+
+<center>
+
+<img src="zillow.png" width="400"/>
+
+</center>
+
+## The data set
+
+The dataset Sacramento contains house and sale price data for 932 homes in Sacramento CA. These are real state transactions reported over a five-day period.
+
+The original data were obtained from the website for the SpatialKey software.
+
+Google was used to fill in missing/incorrect data.
+
+```{r}
+# delete everything
+rm(list=ls()) 
+
+library(leaflet)
+library(tidyverse)
+library(MASS)
+library(caret)
+```
+
+Load the dataset:
+
+```{r}
+data(Sacramento)
+```
+
+A very brief summary
+
+```{r}
+names(Sacramento)
+dim(Sacramento)
+str(Sacramento)
+summary(Sacramento)
+```
+
+## Splitting
+
+```{r}
+in_train <- createDataPartition(log(Sacramento$price), p = 0.75, list = FALSE)  # 75% for training
+training <- Sacramento[ in_train,]
+testing <- Sacramento[-in_train,]
+nrow(training)
+nrow(testing)
+
+```
+
+# Some exploratory analysis
+
+Plot the training and test set locations
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(Sacramento$longitude), lat=median(Sacramento$latitude), zoom = 10) %>%
+  # Marcas mediante circulos
+  addCircles(data=training,
+             lng = ~longitude, 
+             lat = ~latitude,
+             color = "blue")  %>%
+  addCircles(data=testing,
+             lng = ~longitude, 
+             lat = ~latitude,
+             color = "red") %>%
+  addLabelOnlyMarkers(
+    lng = median(Sacramento$longitude)-.6, lat = median(Sacramento$latitude)+.3,
+    label = "Train vs Test sets",
+    labelOptions = labelOptions(textsize = "20px",noHide = T, textOnly = T))
+```
+
+Training in Blue, Testing in Red
+
+Seems a reasonable partition (no bias)
+
+Now, for the training set, include the price and sqft information
+
+```{r}
+color_pal <- colorNumeric(palette = "RdYlBu", domain = training$price, reverse=T)
+
+map = leaflet(training) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng=median(training$longitude), lat=median(training$latitude), zoom = 9) %>%
+  # Marcas mediante circulos
+  addCircles(lng = ~longitude, 
+             lat = ~latitude,
+             radius = ~sqrt(sqft)*2,
+             color = ~color_pal(price)) %>% 
+  addLabelOnlyMarkers(
+    lng = median(training$longitude)-.6, lat = median(training$latitude)+.3,
+    label = "Price and size",
+    labelOptions = labelOptions(textsize = "20px",noHide = T, textOnly = T)) 
+
+map %>% addLegend(position="bottomleft", pal = color_pal, values = ~price, bins=4)
+
+```
+
+How many variables are displayed in this 2-D graph?
+
+Home prices:
+
+```{r}
+training %>% ggplot(aes(x=price)) + geom_density(fill="navyblue") + scale_x_log10()
+```
+
+Prices are somehow symmetric but with high variability
+
+Prices per sqft:
+
+```{r}
+training %>% ggplot(aes(x=price/sqft)) + geom_density(fill="navyblue") + scale_x_log10()
+```
+
+Price vs Size
+
+```{r}
+ggplot(training, aes(x=sqft, y=price)) + ylab("price") + 
+  geom_point(alpha=0.6) + ggtitle("Price vs size of living area")
+```
+
+Linear relation but non-constant variability
+
+log(Price) vs Size
+
+```{r}
+ggplot(training, aes(x=sqft, y=log(price))) + ylab("log price") + geom_point(alpha=0.6) + ggtitle("Price vs size of living area")
+
+```
+
+Non-linear relation
+
+log(Price) vs log(Size)
+
+```{r}
+ggplot(training, aes(x=log(sqft), y=log(price))) + ylab("log price") + geom_point(alpha=0.6) + ggtitle("Price vs size of living area")
+```
+
+Better linear relation and more constant variability
+
+Finally, examine the data
+
+```{r}
+summary(training)
+```
+
+# Some simple and multiple regression models
+
+Which are the most correlated variables with price?
+
+```{r}
+corr_price <- sort(cor(training[,c(3,4,5,7,8,9)])["price",], decreasing = T)
+corr=data.frame(corr_price)
+ggplot(corr,aes(x = row.names(corr), y = corr_price)) + 
+  geom_bar(stat = "identity", fill = "lightblue") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "Predictors", y = "Price", title = "Correlations") + 
+  theme(plot.title = element_text(hjust = 0, size = rel(1.5)),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Simple regression: try first the most relevant predictor from previous analysis
+
+```{r}
+# Insert your code here:
+
+linFit <- lm(log(price) ~ sqft, data=training)
+summary(linFit)
+```
+
+R2 is roughly 50%, the size is highly significant
+
+Diagnosis:
+
+```{r}
+par(mfrow=c(2,2))
+plot(linFit, pch=23 ,bg='orange',cex=2)
+```
+
+Insights?
+
+A better simple regression
+
+```{r}
+# Insert your code here:
+
+linFit <- lm(log(price) ~ log(sqft), data=training)
+summary(linFit)
+```
+
+Predictions:
+
+```{r}
+pr.simple = exp(predict(linFit, newdata=testing))
+cor(testing$price, pr.simple)^2
+```
+
+Not a bad model using only one regressor
+
+## Multiple regression:
+
+```{r}
+linFit <- lm(log(price) ~ beds + baths + log(sqft) + type + latitude*longitude, data=training)
+summary(linFit)
+```
+
+R2 is roughly 60%, some variables non-significant
+
+Prediction
+
+```{r}
+pr.multiple = exp(predict(linFit, newdata=testing))
+cor(testing$price, pr.multiple)^2
+```
+
+# Model Selection
+
+First using an "old" package
+
+```{r}
+library(leaps)
+exhaustive <- regsubsets(log(price) ~ beds + baths*type + log(sqft) + latitude*longitude + I(longitude^2) + I(latitude^2), data=training)
+
+summary(exhaustive)
+plot(summary(exhaustive)$bic, type = 'l')
+
+```
+
+Now using a more friendly package
+
+```{r}
+library(olsrr)
+
+model = log(price) ~ beds + baths*type + log(sqft) + latitude*longitude + I(longitude^2) + I(latitude^2)
+
+linFit <- lm(model, data=training)
+
+ols_step_all_possible(linFit) # All possible subset regressions: the number is exponential with p 
+
+ols_step_best_subset(linFit) # The best subset regression for each p: still exponential with p 
+
+```
+
+More practical methods when dimension ($p/n$) is high
+
+```{r}
+ols_step_forward_p(linFit) # forward based on p-value
+plot(ols_step_forward_p(linFit))
+```
+
+```{r}
+ols_step_forward_aic(linFit) # forward based on AIC
+
+```
+
+```{r}
+ols_step_backward_aic(linFit) # backward AIC
+
+```
+
+```{r}
+ols_step_both_aic(linFit) # stepwise AIC
+
+```
+
+This model with 8 variables seems reasonable: it's simple and explains well the price variability
+
+```{r}
+linFit <- lm(log(price) ~ beds + baths*type + log(sqft) + type + I(longitude^2), data=training)
+summary(linFit)
+```
+
+Does the beds coefficient make any sense? why?
+
+## Prediction
+
+```{r}
+predictions <- exp(predict(linFit, newdata=testing))
+cor(testing$price, predictions)^2
+RMSE <- sqrt(mean((predictions - testing$price)^2))
+RMSE
+```
+
+Seems reasonable. R2 in testing is similar to that in training
+
+Now we need to try some advanced regression models: statistical learning + machine learning
+
+But first... how do we know we are doing well?
+
+# A benchmark
+
+Always consider a benchmark model (or a reference)
+
+For instance, we can predict all the new home prices as the average price in the training set
+
+```{r}
+mean(training$price)
+
+# This is equivalent to
+benchFit <- lm(price ~ 1, data=training)
+predictions <- predict(benchFit, newdata=testing)
+cor(testing$price, predictions)^2
+RMSE <- sqrt(mean((predictions - testing$price)^2))
+RMSE
+```
+
+Note the benchmark performs worse than multiple regression...
+
+But in noisy and difficult applications, the benchmark is difficult to beat!
+
+# Statistical Learning tools
+
+Let's use the caret package with CV
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 5, repeats = 1)
+
+```
+
+But with some feature engineering first: note beds, baths, and sqft are correlated
+
+```{r}
+training$bedsperbath = training$beds/training$baths
+testing$bedsperbath = testing$beds/testing$baths
+```
+
+Also remember longitude and latitude are related in a non-linear way with price
+
+Hence we can add some interactions
+
+```{r}
+linFit <- lm(log(price) ~ bedsperbath*type + log(sqft) + latitude:longitude + I(latitude^2)+ I(longitude^2), data=training)
+
+# The syntax x1:x2 tells R to include an interaction term between
+# x1 and x2. The syntax x1*x2 simultaneously includes x1, x2,
+# and the interaction term x1:x2 as predictors; it is a shorthand for
+# x1+x2+x1:x2
+
+summary(linFit)
+```
+
+R2 is roughly 60%, but many variables non-significant
+
+Consider then these two models:
+
+```{r}
+ModelS = log(price) ~ beds + baths + log(sqft) + type + latitude + longitude
+ModelF = log(price) ~ bedsperbath*type + log(sqft) + latitude:longitude + I(latitude^2)+ I(longitude^2)
+
+```
+
+Do we want to include city and zip as predictors?
+
+Let's try, but note in the testing set we can have factor levels not presented in the training
+
+Need to fix that: update factor levels so that prediction works
+
+```{r}
+levels(training$city) <- levels(Sacramento$city)
+levels(training$zip) <- levels(Sacramento$zip)
+
+```
+
+And now, we are ready to include city and zip as predictors
+
+```{r}
+ModelFF = log(price) ~ city + zip + bedsperbath*type + log(sqft) + latitude:longitude + I(latitude^2)+ I(longitude^2)
+
+```
+
+From now, we are going to try many models, so it's convenient to create a data frame with all the predictors (prices in logs)
+
+```{r}
+test_results <- data.frame(price = log(testing$price))
+
+```
+
+## Linear regression
+
+Train
+
+```{r}
+lm_tune <- train(ModelS, data = training, 
+                 method = "lm", 
+                 preProc=c('scale', 'center'),
+                 trControl = ctrl)
+lm_tune
+```
+
+Predict
+
+```{r}
+test_results$lm <- predict(lm_tune, testing)
+postResample(pred = test_results$lm,  obs = test_results$price)
+
+```
+
+Visualization
+
+```{r}
+qplot(test_results$lm, test_results$price) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(10, 15), y = c(10, 15)) +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+Some small bias
+
+## Overfitted linear regression
+
+Train
+
+```{r}
+alm_tune <- train(ModelFF, data = training, 
+                  method = "lm", 
+                  preProc=c('scale', 'center'),
+                  trControl = ctrl)
+```
+
+Predict
+
+```{r}
+test_results$alm <- predict(alm_tune, testing)
+postResample(pred = test_results$alm,  obs = test_results$price)
+
+```
+
+Is overfitting benign or dangerous to predict?
+
+Visualization
+
+```{r}
+qplot(test_results$alm, test_results$price) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(10, 15), y = c(10, 15)) +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+Less bias
+
+## Forward regression
+
+Train
+
+```{r}
+for_tune <- train(ModelF, data = training, 
+                  method = "leapForward", 
+                  preProc=c('scale', 'center'),
+                  tuneGrid = expand.grid(nvmax = 4:10),
+                  trControl = ctrl)
+
+for_tune
+plot(for_tune)
+```
+
+Which variables are selected?
+
+```{r}
+coef(for_tune$finalModel, for_tune$bestTune$nvmax)
+
+```
+
+Predict
+
+```{r}
+test_results$frw <- predict(for_tune, testing)
+postResample(pred = test_results$frw,  obs = test_results$price)
+
+```
+
+Visualization
+
+```{r}
+qplot(test_results$frw, test_results$price) + 
+  labs(title="Forward Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(10, 15), y = c(10, 15)) +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+some bias, very similar to lm
+
+## Backward regression
+
+Train
+
+```{r}
+back_tune <- train(ModelF, data = training, 
+                   method = "leapBackward", 
+                   preProc=c('scale', 'center'),
+                   tuneGrid = expand.grid(nvmax = 4:10),
+                   trControl = ctrl)
+back_tune
+plot(back_tune)
+```
+
+which variables are selected?
+
+```{r}
+coef(back_tune$finalModel, back_tune$bestTune$nvmax)
+```
+
+Predict
+
+```{r}
+test_results$bw <- predict(back_tune, testing)
+postResample(pred = test_results$bw,  obs = test_results$price)
+```
+
+Visualize
+
+```{r}
+qplot(test_results$bw, test_results$price) + 
+  labs(title="Backward Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  lims(x = c(10, 15), y = c(10, 15)) +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+some bias, very similar to lm
+
+## Stepwise regression
+
+```{r}
+step_tune <- train(ModelF, data = training, 
+                   method = "leapSeq", 
+                   preProc=c('scale', 'center'),
+                   tuneGrid = expand.grid(nvmax = 4:10),
+                   trControl = ctrl)
+plot(step_tune)
+
+# which variables are selected?
+coef(step_tune$finalModel, step_tune$bestTune$nvmax)
+
+test_results$seq <- predict(step_tune, testing)
+postResample(pred = test_results$seq,  obs = test_results$price)
+
+```
+
+## Ridge regression
+
+Let's use first the original glmnet package
+
+### glmnet
+
+The package, written originally in Fortran, does not allow for R formulas, hence we need to transform a model into a matrix format
+
+```{r}
+library(glmnet)
+
+# X matrix
+X = model.matrix(ModelF, data=training)[,-1]  # skip column of ones
+
+# y variable
+y = log(training$price)
+```
+
+Now we need to define a grid for the penalty hyper-parameter lambda
+
+```{r}
+grid = seq(0, .1, length = 100)  # a 100-size grid for lambda (rho in slides)
+```
+
+Estimate the ridge regression for all the penalties defined in the grid. The algorithm is extremely fast
+
+```{r}
+ridge.mod = glmnet(X, y, alpha=0, lambda=grid)  # alpha=0 for ridge regression
+```
+
+Remember ridge regression is shrinking only beta's associated with variables, not $\beta_0$
+
+For each of the 100 values of rho (lambda), there are 10 estimated parameters
+
+```{r}
+dim(coef(ridge.mod))
+coef(ridge.mod)
+```
+
+Solution path
+
+```{r}
+plot(ridge.mod, xvar="lambda")
+```
+
+How to select the optimal hyper-parameter?
+
+```{r}
+ridge.cv = cv.glmnet(X, y, type.measure="mse", alpha=0)
+plot(ridge.cv)
+```
+
+The lowest point in the curve indicates the optimal lambda: the log value of lambda that best minimised the error in cross-validation
+
+```{r}
+opt.lambda <- ridge.cv$lambda.min
+opt.lambda
+```
+
+To estimate the betas, lambda.1se is recommended by the authors
+
+```{r}
+lambda.index <- which(ridge.cv$lambda == ridge.cv$lambda.1se)
+beta.ridge <- ridge.cv$glmnet.fit$beta[, lambda.index]
+beta.ridge
+```
+
+Prediction
+
+```{r}
+X.test = model.matrix(ModelF, data=testing)[,-1]  # skip column of ones
+
+ridge.pred = predict(ridge.cv$glmnet.fit, s=opt.lambda, newx=X.test)
+```
+
+To visualize the performance, we can use the postResample function in caret
+
+```{r}
+y.test = log(testing$price)
+
+postResample(pred = ridge.pred,  obs = y.test)
+```
+
+Let's do it now with caret
+
+### caret
+
+```{r}
+# the grid for lambda
+ridge_grid <- expand.grid(lambda = seq(0, .1, length = 100))
+
+# train
+ridge_tune <- train(ModelF, data = training,
+                    method='ridge',
+                    preProc=c('scale','center'),
+                    tuneGrid = ridge_grid,
+                    trControl=ctrl)
+plot(ridge_tune)
+
+# the best tune
+ridge_tune$bestTune
+
+# prediction
+test_results$ridge <- predict(ridge_tune, testing)
+
+postResample(pred = test_results$ridge,  obs = test_results$price)
+
+```
+
+Similar results but easier to use
+
+## The Lasso
+
+Directly with caret
+
+```{r}
+lasso_grid <- expand.grid(fraction = seq(.01, 1, length = 100))
+
+lasso_tune <- train(ModelF, data = training,
+                    method='lasso',
+                    preProc=c('scale','center'),
+                    tuneGrid = lasso_grid,
+                    trControl=ctrl)
+plot(lasso_tune)
+
+lasso_tune$bestTune
+
+test_results$lasso <- predict(lasso_tune, testing)
+postResample(pred = test_results$lasso,  obs = test_results$price)
+
+```
+
+Insights?
+
+## Elastic Net
+
+Let's check the names for the hyper-parameters
+
+```{r}
+modelLookup('glmnet')
+```
+
+```{r}
+elastic_grid = expand.grid(alpha = seq(0, .2, 0.01), lambda = seq(0, .1, 0.01))
+
+glmnet_tune <- train(ModelF, data = training,
+                     method='glmnet',
+                     preProc=c('scale','center'),
+                     tuneGrid = elastic_grid,
+                     trControl=ctrl)
+
+plot(glmnet_tune)
+glmnet_tune$bestTune
+
+test_results$glmnet <- predict(glmnet_tune, testing)
+
+postResample(pred = test_results$glmnet,  obs = test_results$price)
+
+```
+
+# Machine Learning tools
+
+## kNN
+
+Let's chech the names for hyper-parameters
+
+```{r}
+modelLookup('kknn')
+# 3 hyper-parameters: kmax, distance, kernel
+# kmax: number of neighbors considered
+# distance: parameter of Minkowski distance (p in Lp)
+# kernel: "rectangular" (standard unweighted knn), "triangular", "epanechnikov" (or beta(2,2)), "biweight" (or beta(3,3)), "tri- weight" (or beta(4,4)), "cos", "inv", "gaussian", "rank" and "optimal".
+
+```
+
+Train: because ML models are non-linear, we can use simpler formulas
+
+```{r}
+knn_tune <- train(ModelS, 
+                  data = training,
+                  method = "kknn",   
+                  preProc=c('scale','center'),
+                  tuneGrid = data.frame(kmax=c(11,13,15,19,21),distance=2,kernel='optimal'),
+                  trControl = ctrl)
+plot(knn_tune)
+
+test_results$knn <- predict(knn_tune, testing)
+
+postResample(pred = test_results$knn,  obs = test_results$price)
+```
+
+## Random Forests
+
+```{r}
+rf_tune <- train(ModelS, 
+                 data = training,
+                 method = "rf",
+                 preProc=c('scale','center'),
+                 trControl = ctrl,
+                 ntree = 100,
+                 tuneGrid = data.frame(mtry=c(1,3,5,7)),
+                 importance = TRUE)
+
+plot(rf_tune)
+
+test_results$rf <- predict(rf_tune, testing)
+
+postResample(pred = test_results$rf,  obs = test_results$price)
+```
+
+Variable importance
+
+```{r}
+plot(varImp(rf_tune, scale = F), scales = list(y = list(cex = .95)))
+
+```
+
+## Gradient Boosting
+
+```{r}
+xgb_tune <- train(ModelS, 
+                  data = training,
+                  method = "xgbTree",
+                  preProc=c('scale','center'),
+                  objective="reg:squarederror",
+                  trControl = ctrl,
+                  tuneGrid = expand.grid(nrounds = c(500,1000), max_depth = c(5,6,7), eta = c(0.01, 0.1, 1),
+                                         gamma = c(1, 2, 3), colsample_bytree = c(1, 2),
+                                         min_child_weight = c(1), subsample = c(0.2,0.5,0.8)))
+
+test_results$xgb <- predict(xgb_tune, testing)
+
+postResample(pred = test_results$xgb,  obs = test_results$price)
+```
+
+# Ensemble
+
+Let's summarize the MAE for all the tools
+
+```{r}
+apply(test_results[-1], 2, function(x) mean(abs(x - test_results$price)))
+
+```
+
+Ensemble
+
+```{r}
+# Combination
+test_results$comb = (test_results$alm + test_results$knn + test_results$rf)/3
+
+postResample(pred = test_results$comb,  obs = test_results$price)
+
+```
+
+It seems a good choice
+
+# Final predictions
+
+```{r}
+yhat = exp(test_results$comb)
+
+head(yhat) # show the prediction for 6 home prices
+
+hist(yhat, col="lightblue")
+
+```
+
+Take care: asymmetric distribution in price predictions
+
+# Prediction Intervals
+
+The errors are more symmetric
+
+```{r}
+y = exp(test_results$price)
+error = y-yhat
+hist(error, col="lightblue")
+```
+
+Because ML tools do not provide prediction intervals, we can split the testing set in two parts: one to measure the size of the noise, and the other one to compute the intervals from that size
+
+Let's use the first 100 homes in testing to compute the noise size
+
+```{r}
+noise = error[1:100]
+```
+
+Prediction intervals: let's fix a 90% confidence
+
+```{r}
+lwr = yhat[101:length(yhat)] + quantile(noise,0.05, na.rm=T)
+upr = yhat[101:length(yhat)] + quantile(noise,0.95, na.rm=T)
+```
+
+Performance using the last prices in yhat
+
+```{r}
+predictions = data.frame(real=y[101:length(y)], fit=yhat[101:length(yhat)], lwr=lwr, upr=upr)
+
+predictions = predictions %>% mutate(out=factor(if_else(real<lwr | real>upr,1,0)))
+
+# how many real observations are out of the intervals?
+mean(predictions$out==1)
+```
+
+```{r}
+ggplot(predictions, aes(x=fit, y=real))+
+  geom_point(aes(color=out)) + theme(legend.position="none") +
+  xlim(20000, 1000000) + ylim(20000, 1000000)+
+  geom_ribbon(data=predictions,aes(ymin=lwr,ymax=upr),alpha=0.3) +
+  labs(title = "Prediction intervals", x = "prediction",y="real price")
+
+```

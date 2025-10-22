@@ -1,0 +1,525 @@
+---
+title: "Case Study: Credit Scoring"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+# Motivation
+
+When a bank receives a loan application, based on the applicant's
+profile, the bank has to make a decision regarding whether to go ahead
+with the loan approval or not. Two types of risks are associated with
+the bank's decision:
+
+-   If the applicant has a good credit risk, i.e. is likely to repay the
+    loan, then not approving the loan to the client results in a loss of
+    business to the bank
+
+-   If the applicant has a bad credit risk, i.e. is not likely to repay
+    the loan, then approving the loan to the client results in a
+    financial loss to the bank
+
+To minimize loss from the bank's perspective, the bank needs a decision
+rule regarding who to give approval of the loan and who not to
+
+<center>
+
+<img src="creditscoring.png" width="400"/>
+
+</center>
+
+An applicant's demographic and socio-economic profiles are considered by
+loan managers before a decision is taken regarding his/her loan
+application.
+
+<br>
+
+**Goal:** Predict whether or not somebody will experience financial
+distress in the future
+
+The credit score is then estimated by the probability of default based
+on historical data
+
+### Available Data
+
+The Credit Scoring dataset contains data on 10 predictors and the
+objective is, using these predictors, to predict the probability that
+somebody will experience financial distress in the next two years.
+
+Data can be found in Kaggle:
+<https://www.kaggle.com/c/GiveMeSomeCredit/overview>
+
+### Load useful libraries
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(mice)
+library(VIM)
+library(GGally)
+library(MASS)
+library(glmnet)
+library(e1071) 
+library(rpart)
+library(pROC)
+library(class)
+library(randomForest)
+library(caret)
+```
+
+# Load and explore the data set
+
+```{r}
+dataCredit<-read.csv("credit-scoring.csv", header = TRUE, sep = ",")
+
+glimpse(dataCredit)
+```
+
+Variable 'SeriousDlqin2yrs' contains the labels: whether a person
+experienced 90 days past due delinquency or worse
+
+Features or explanatory variables or predictors:
+
+-   RevolvingUtilizationOfUnsecuredLines: Total balance on credit cards
+    and personal lines of credit except real estate and no installment
+    debt like car loans divided by the sum of credit limits
+
+-   age: Age of borrower in years
+
+-   NumberOfTime30-59DaysPastDueNotWorse: Number of times borrower has
+    been 30-59 days past due but no worse in the last 2 years.
+
+-   DebtRatio: Monthly debt payments, alimony,living costs divided by
+    monthly gross income
+
+-   MonthlyIncome: Monthly income
+
+-   NumberOfOpenCreditLinesAndLoans: Number of Open loans (installment
+    like car loan or mortgage) and Lines of credit (e.g. credit cards)
+
+-   NumberOfTimes90DaysLate: Number of times borrower has been 90 days
+    or more past due.
+
+-   NumberRealEstateLoansOrLines: Number of mortgage and real estate
+    loans including home equity lines of credit
+
+-   NumberOfTime60-89DaysPastDueNotWorse: Number of times borrower has
+    been 60-89 days past due but no worse in the last 2 years.
+
+-   NumberOfDependents: Number of dependents in family excluding
+    themselves (spouse, children etc.)
+
+Remove Id column and rename the target
+
+```{r}
+dataCredit <- dataCredit[,-1]
+names(dataCredit)[1] = "Creditability"
+dataCredit$Creditability = as.factor(dataCredit$Creditability)
+levels(dataCredit$Creditability)=c("Good", "Bad")
+```
+
+Split data into training and testing sets
+
+```{r}
+in_train <- createDataPartition(dataCredit$Creditability, p = 0.4, list = FALSE)  # 40% for training
+training <- dataCredit[ in_train,]
+testing <- dataCredit[-in_train,]
+nrow(training)
+nrow(testing)
+
+table(training$Creditability)/length(training$Creditability)
+```
+
+93% good loans, 7% bad loans: unbalanced dataset
+
+### Data cleaning and Feature Engineering
+
+Take a look first:
+
+```{r}
+summary(training)
+```
+
+Insights?
+
+Perform some data exploration for predictors
+
+```{r}
+# Insert your code here
+
+ggplot(training, aes(RevolvingUtilizationOfUnsecuredLines)) + geom_density(fill="lightblue") 
+# RevolvingUtilizationOfUnsecuredLines should be less than 1, if greater than 1 then balance exceeds limits
+
+ggplot(training, aes(RevolvingUtilizationOfUnsecuredLines)) + scale_x_log10()	+ geom_density(fill="lightblue") 
+
+# the same but without missing values at 0
+ggplot(training, aes(log(RevolvingUtilizationOfUnsecuredLines+1))) + geom_density(fill="lightblue") 
+
+# Decomposing it by creditability
+ggplot(training, aes(log(RevolvingUtilizationOfUnsecuredLines+1), fill = Creditability)) + geom_density(alpha=0.5) 
+
+ggplot(training, aes(DebtRatio)) + geom_density(fill="lightblue") 
+# DebtRatio should be less than 1 for a good customer, and the larger the worse
+# there are like two groups: those customers with DebtRatio<1 and those with >1
+# training$DebtRatioC = factor(ifelse(training$DebtRatio <1, "Good", "Bad"))
+# testing$DebtRatioC = factor(ifelse(testing$DebtRatio <1, "Good", "Bad"))
+
+ggplot(training, aes(log(DebtRatio+1), fill = Creditability))  + geom_density(alpha=0.5)
+
+ggplot(training, aes(log(MonthlyIncome+1), fill = Creditability)) + geom_density(alpha=0.5) 
+# many customers with monthly income = 0, the rest around 5400
+
+ggplot(training, aes(age, fill = Creditability)) + geom_density(alpha=0.5) 
+
+
+```
+
+Some cleaning:
+
+There are strange categories like 96 and 98
+
+```{r}
+table(training$NumberOfTime30.59DaysPastDueNotWorse)
+table(training$NumberOfTime60.89DaysPastDueNotWorse)
+table(training$NumberOfTimes90DaysLate)
+```
+
+Hence, replace coded values "96" and "98" with 0
+
+```{r}
+training$NumberOfTime30.59DaysPastDueNotWorse[training$NumberOfTime30.59DaysPastDueNotWorse==96] <- 0
+training$NumberOfTime30.59DaysPastDueNotWorse[training$NumberOfTime30.59DaysPastDueNotWorse==98] <- 0
+training$NumberOfTime60.89DaysPastDueNotWorse[training$NumberOfTime60.89DaysPastDueNotWorse==96] <- 0
+training$NumberOfTime60.89DaysPastDueNotWorse[training$NumberOfTime60.89DaysPastDueNotWorse==98] <- 0
+training$NumberOfTimes90DaysLate[training$NumberOfTimes90DaysLate==96] <- 0
+training$NumberOfTimes90DaysLate[training$NumberOfTimes90DaysLate==98] <- 0
+
+testing$NumberOfTime30.59DaysPastDueNotWorse[testing$NumberOfTime30.59DaysPastDueNotWorse==96] <- 0
+testing$NumberOfTime30.59DaysPastDueNotWorse[testing$NumberOfTime30.59DaysPastDueNotWorse==98] <- 0
+testing$NumberOfTime60.89DaysPastDueNotWorse[testing$NumberOfTime60.89DaysPastDueNotWorse==96] <- 0
+testing$NumberOfTime60.89DaysPastDueNotWorse[testing$NumberOfTime60.89DaysPastDueNotWorse==98] <- 0
+testing$NumberOfTimes90DaysLate[testing$NumberOfTimes90DaysLate==96] <- 0
+testing$NumberOfTimes90DaysLate[testing$NumberOfTimes90DaysLate==98] <- 0
+
+```
+
+Moreover, there is one outlier with 54 loans or lines
+
+```{r}
+if(sum(training$NumberRealEstateLoansOrLines==54)>0){
+  training<-training[-(which(training$NumberRealEstateLoansOrLines==54)),]
+}
+```
+
+### Missing values
+
+```{r}
+# Insert your code here
+
+aggr(training, numbers = TRUE, sortVars = TRUE, labels = names(training), cex.axis = .5, gap = 1, ylab= c('Missing data','Pattern'))
+```
+
+We can create a knn imputation model on the training data
+
+And use the imputation model to predict the values of missing data
+points
+
+```{r, eval=FALSE}
+preProcess_missingdata <- preProcess(training, method='knnImpute')
+library(RANN)  # required for knnInpute
+training.imp <- predict(preProcess_missingdata, newdata = training)
+anyNA(training.imp)
+```
+
+Less sophisticated ideas:
+
+```{r}
+# Replace NA in NumberOfDependents with 0
+training$NumberOfDependents[is.na(training$NumberOfDependents)] <- 0
+testing$NumberOfDependents[is.na(testing$NumberOfDependents)] <- 0
+
+# Imputation with median
+training$MonthlyIncome = ifelse(is.na(training$MonthlyIncome), median(training$MonthlyIncome, na.rm=TRUE), training$MonthlyIncome)
+# note we impute NA in testing with info from training
+testing$MonthlyIncome = ifelse(is.na(testing$MonthlyIncome), median(training$MonthlyIncome, na.rm=TRUE), testing$MonthlyIncome)
+```
+
+Even easier but more dangerous:
+
+```{r, eval=FALSE}
+na.omit(training)
+```
+
+### Correlations between predictors
+
+```{r}
+ggcorr(training[,-1], label = T)
+```
+
+Moderate correlations
+
+# Modeling
+
+### Logistic regression
+
+Because we have binary classification, we can use the standard glm
+function in R:
+
+```{r}
+# Insert your code here
+
+logit.model <- glm(Creditability ~ ., family=binomial(link='logit'), data=training)
+summary(logit.model)
+```
+
+Make predictions (posterior probabilities)
+
+```{r}
+probability <- predict(logit.model,newdata=testing, type='response')
+head(probability)
+prediction <- as.factor(ifelse(probability > 0.5,"Bad","Good"))
+head(prediction)
+```
+
+Performance: confusion matrix
+
+```{r}
+confusionMatrix(prediction, testing$Creditability)
+```
+
+Note the previous threshold=0.5 is indeed an hyper-parameter. How to
+optimize it?
+
+If the bank is more worried about false Creditable loans (financial
+loss) than false non-Creditable ones (loss of business), then in the
+confusion matrix, better to decrease the element (1,2) at the cost of
+increasing the (2,1)
+
+### Penalized logistic regression
+
+When the dimension is high, it is better to use a penalized version. The
+most known is glmnet or elasticnet.
+
+```{r}
+logit.model <- glmnet(as.matrix(training[,-1]),training$Creditability, family=c("binomial"), alpha=0, lambda=0.01)
+probability <- predict(logit.model,as.matrix(testing[,-1]), type='response')
+prediction <- as.factor(ifelse(probability > 0.5,"Bad","Good"))
+confusionMatrix(prediction, testing$Creditability)
+```
+
+The previous alpha and lambda are indeed hyper-parameters. How to
+optimize them?
+
+### The ROC curve
+
+ROC curve shows true positives vs false positives in relation with
+different thresholds:
+
+-   y-axis = Sensitivity (TP)
+-   x-axis = Specificity (1-FP)
+
+Choose here any model:
+
+```{r}
+model <- lda(Creditability ~ ., data=training, prior = c(.9, .1))
+
+# model <- glm(Creditability ~ ., family=binomial(link='logit'), data=training)
+
+# model <- glmnet(as.matrix(training[,-1]),training$Creditability, family=c("binomial"), alpha=0, lambda=0.01)
+
+```
+
+Obtain posterior probabilities and compute the ROC
+
+```{r}
+probability = predict(model, testing)$posterior
+
+roc.lda <- roc(testing$Creditability,probability[,2])
+auc(roc.lda) 
+
+plot.roc(testing$Creditability, probability[,2],col="darkblue", print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", print.thres=TRUE)
+```
+
+AUD = Area Under the Curve: 0.81, the larger the better. Maximum is 1
+
+Seems a threshold around 0.03 is reasonable
+
+-   this is because classes are unbalanced
+
+-   this is the threshold with the best balance between sensitivity and
+    specificity
+
+-   but is it the optimal threshold for the company?
+
+# Incorporing economic impact
+
+A naive-manager classifier: all loans are approved, the only error (7%)
+comes from the false creditable loans (there are no false non-creditable
+loans)
+
+We can reduce the false positives by decreasing the probability
+threshold
+
+And we can select the optimal threshold using some specific economic
+effects
+
+Assume the bank predicts an application to be credit-worthy and it
+actually turns out to be credit worthy. That implies, for that
+application, a 12% profit at the end of 2 years
+
+On the other hand, if the application turns out to be a default, then
+the loss is 100%
+
+If the bank predicts an application to be non-creditworthy, then the
+profit is 0% if the application turns out to be a default, but there is
+an opportunity loss (1% in 2 years) if the application is really
+credit-worthy
+
+Table of profits:
+
+| Prediction/Reference |  Good |  Bad |
+|----------------------|------:|-----:|
+| Good                 |  0.12 | -1.0 |
+| Bad                  | -0.01 |  0.0 |
+
+For instance, a naive manager would incur a profit per applicant of
+$0.12\times0.93 - 1.0\times0.07 - 0.01\times0.0 + 0.0\times0.0 = 0.0416$
+
+This is the profit we should improve
+
+Profit table as a vector:
+
+```{r}
+profit.unit <- c(0.12, -0.01, -1.0, 0.0)
+```
+
+What is the profit of our last model?
+
+```{r}
+# Insert here your code
+
+threshold = 0.4 # Better to predict more Bads than Goods
+
+Cred.pred = rep("Good", nrow(testing))
+Cred.pred[which(probability[,2] > threshold)] = "Bad"
+CM = confusionMatrix(factor(Cred.pred), testing$Creditability)$table
+
+```
+
+Profit per applicant for lda classifier with threshold 0.4
+
+```{r}
+profit.applicant <- sum(profit.unit*CM)/sum(CM)
+profit.applicant
+```
+
+If the average loan amount is 15000 euros, and there are over 10000
+applicants in one month then this is the expected profit in 2 years for
+the applicants in one month:
+
+```{r}
+profit.applicant*15000*10000
+```
+
+But this is for threshold=0.4
+
+With this economic information, how to select the optimal threshold?
+
+### Selecting the optimal threshold to give the loan
+
+```{r}
+profit.i = matrix(NA, nrow = 50, ncol = 10)
+# 100 replicates for training/testing sets for each of the 10 values of threshold
+
+p0=0.8
+p1=1-p0
+
+j <- 0
+for (threshold in seq(0.05,0.5,0.05)){
+  #for (p1 in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9)){
+  
+  j <- j + 1
+  cat(j)
+  for(i in 1:50){
+    
+    # partition data intro training (40%) and testing sets (60%)
+    d <- createDataPartition(training$Creditability, p = 0.4, list = FALSE)
+    # select training sample
+    
+    train<-training[d,]
+    test <-training[-d,]  
+    
+    #p1=1-p0
+    
+    # consider the lda classifier, but any other classifier should be considered
+    full.model <- lda(Creditability ~ ., data=train, prior = c(p0, p1))
+    
+    # posterior probabilities
+    probability = predict(full.model, test)$posterior
+    
+    # Predictions with a given threshold
+    Cred.pred = rep("Good", nrow(test))
+    Cred.pred[which(probability[,2] > threshold)] = "Bad"
+    
+    CM = confusionMatrix(factor(Cred.pred), test$Creditability)$table
+
+    profit.applicant <- sum(profit.unit*CM)/sum(CM)
+    profit.i[i,j] <- profit.applicant
+    
+  }
+}
+
+```
+
+Summary of economic value of predictions
+
+```{r}
+boxplot(profit.i, main = "Hyper-parameter selection",
+        ylab = "unit profit",
+        xlab = "threshold",names = seq(0.05,0.5,0.05),col="royalblue2")
+
+```
+
+threshold values around 0.15 are reasonable:
+
+```{r}
+apply(profit.i, 2, median) 
+```
+
+### Final prediction for testing set using the optimal hyper-parameter:
+
+```{r}
+lda.model <- lda(Creditability ~ ., data=training, prior = c(.8, .2))
+probability = predict(lda.model, newdata=testing)$posterior
+threshold = 0.15
+Cred.pred = rep("Good", nrow(testing))
+Cred.pred[which(probability[,2] > threshold)] = "Bad"
+CM = confusionMatrix(factor(Cred.pred), testing$Creditability)$table
+profit.applicant <- sum(profit.unit*CM)/sum(CM)
+profit.applicant
+```
