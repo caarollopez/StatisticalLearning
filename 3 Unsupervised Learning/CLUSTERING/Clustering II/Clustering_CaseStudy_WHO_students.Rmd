@@ -1,0 +1,424 @@
+---
+title: "Clustering: organize countries by socio-economic-health"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+```{r, echo=FALSE}
+htmltools::img(src = knitr::image_uri(file.path("uc3m.jpg")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:0; right:0; padding:10px;',
+               width="600",
+               height="80")
+```
+
+# Motivation
+
+Can we organize the countries of the world by variables we are interested in?
+
+For instance, the World Bank organizes countries in 4 income groups using just the Gross National Income (GNI) per capita
+
+But what if we are interested in health? And in much more variables?
+
+In this case study, we will categorise countries using socio-economic and health indicators that determine the overall development of the world
+
+```{r}
+library(tidyverse)
+library(countrycode)
+library(rworldmap)
+```
+
+The dataset is obtained through the notebook "WHO_preprocessing", which creates a file named "WorldData2022.txt". There you can find explanation for the following World Health Organization (WHO) variables:
+
+-   Life expectancy at birth (years)
+-   GNI per capita
+-   Infant mortality rate (deaths per 1000 live births)
+-   Population (in thousands) total
+-   Ambient air pollution (Annual PM2.5 [ug/m3])
+-   Estimates of rates of homicides per 100 000 population
+-   Hospital beds (per 10 000 population)
+-   Percentage of individuals using the Internet
+-   Physicians density (per 1000 population)
+-   Schooling1 = mean of years of schooling for adults aged 25 years and more
+-   Schooling2 = expected years of schooling for children of school entering age
+-   Human Development Index (HDI)
+
+## Load data and descriptive analysis
+
+```{r}
+WHO = read.table("WorldData2022.txt", sep=",")
+names(WHO)[c(5, 8, 9, 10, 11, 12, 13, 15, 16)] <- c("LifeE", "Pop", "AirP", "HR", "HB", "Int", "Phy", "Sch1", "Sch2")
+```
+
+```{r}
+dim(WHO)
+str(WHO)
+head(WHO)
+tail(WHO)
+summary(WHO)
+```
+
+Out of the 200 countries in the world, we have almost complete information (10 variables) from 190 countries:
+
+-   Diverse variables (socio-economic and health)
+
+-   Just a few missing values
+
+The output of the clustering tool depends directly on the selected variables for the input. This selection is subjective and depends on the application's objective
+
+```{r}
+# SELECT HERE YOUR FAVOURITE VARIABLES
+X = WHO %>% dplyr::select(-Continent,-Region,-Country, -COUNTRY,-Pop,-HDI)
+```
+
+Take care: we are going to omit rows with NAs
+
+```{r}
+dim(WHO)[1]
+dim(na.omit(X))[1]
+
+id.complete = complete.cases(X)
+names = WHO$Country[id.complete]
+continent = WHO$Continent[id.complete]
+HDI = WHO$HDI[id.complete]
+
+X = X[id.complete,]
+row.names(X)=names
+
+X$GNI = log(X$GNI)
+```
+
+Multiple scatterplots:
+
+```{r}
+GGally::ggcorr(X, label = T)
+```
+
+Insights?
+
+# Clustering
+
+Load important clustering libraries
+
+```{r}
+library(factoextra)
+library(cluster)
+library(mclust)
+```
+
+```{r}
+# SELECT HERE YOUR INITIAL GUESS FOR THE NUMBER OF CLUSTERS AND RUN KMEANS
+k = 5 # (as the number of continents) 
+fit = kmeans(scale(X), centers=k, nstart=1000)
+groups = fit$cluster
+barplot(table(groups), col="blue", main = "K MEANS CLUSTER GROUPS")
+```
+
+Somehow an unbalanced classification
+
+## Interpretation of centers:
+
+```{r}
+centers=fit$centers
+
+barplot(centers[1,], las=2, col="darkblue")
+barplot(centers[2,], las=2, col="darkblue")
+barplot(centers[3,], las=2, col="darkblue")
+barplot(centers[4,], las=2, col="darkblue")
+barplot(centers[5,], las=2, col="darkblue")
+```
+
+One small group contains most dangerous countries
+
+One big group seems to contain healthy countries
+
+More insights?
+
+## Clusplot
+
+Plot the countries in a 2D PCA graph, adding colors for the groups
+
+```{r}
+# clusplot
+fviz_cluster(fit, data = X, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+geom_text(label=names,hjust=0, vjust=0,size=2,check_overlap = F)+scale_fill_brewer(palette="Paired")
+```
+
+But what is the meaning of the first PCA?
+
+```{r}
+pca = prcomp(X, scale=T)
+barplot(pca$rotation[,1], las=2, col="salmon", main = "PCA 1")
+```
+
+It is a measure of global development (positive loads on good indicators and negative ones on the bad variables)
+
+We can also use the kmeans of factoextra through eclust which provides different clustering tools (kmeans, pam, hclust, etc.) and different distances and linkages
+
+```{r}
+# este es mas bonito
+fit.kmeans <- eclust(X, "kmeans", stand=TRUE, k=5) 
+```
+
+## Silhouette plot
+
+```{r}
+d <- dist(scale(X), method="euclidean")  
+sil = silhouette(groups, d)
+plot(sil, col=1:5, main="", border=NA)
+summary(sil)
+
+# the same with factoextra
+fviz_silhouette(fit.kmeans)
+```
+
+## Number of groups?
+
+We can get some hints from silhouette, wss, and GAP.
+
+```{r}
+fviz_nbclust(scale(X), kmeans, method = 'silhouette', k.max = 20, nstart = 1000)
+fviz_nbclust(scale(X), kmeans, method = 'wss', k.max = 20, nstart = 1000) # elbow
+fviz_nbclust(scale(X), kmeans, method = 'gap_stat', k.max = 10, nstart = 100, nboot = 500)
+```
+
+Any insight about the number of groups?
+
+## PAM
+
+Partitioning (clustering) of the data into k clusters *around medoids*
+
+More robust version than k-means, the centers are now countries
+
+```{r}
+fit.pam <- eclust(X, "pam", stand=TRUE, k=5, graph=F)
+
+fviz_cluster(fit.pam, data = X, geom = c("point"), pointsize=1)+
+  theme_minimal()+geom_text(label=names,hjust=0, vjust=0,size=2,check_overlap = F)+scale_fill_brewer(palette="Paired")
+```
+
+Number of groups by pam:
+
+```{r}
+fviz_nbclust(scale(X), pam, method = 'silhouette', k.max = 10)
+fviz_nbclust(scale(X), pam, method = 'gap_stat', k.max = 10, nboot = 500)
+```
+
+How similar are the clusters?
+
+```{r}
+# Computes the adjusted Rand index comparing two classifications.
+# The closer to 1 the more agreement
+adjustedRandIndex(fit.kmeans$cluster, fit.pam$clustering) 
+```
+
+Somehow similar
+
+## Map the clustering in a map:
+
+```{r}
+# Select here your favorite clustering tool
+map = data.frame(country=names, value=fit.pam$clustering)
+#map = data.frame(country=names, value=fit.kmeans$cluster)
+
+#Convert the country code into iso3c using the function countrycode()
+map$country = countrycode(map$country, 'country.name', 'iso3c')
+#Create data object supporting the map
+matched <- joinCountryData2Map(map, joinCode = "ISO3",
+                               nameJoinColumn = "country")
+#Draw the map
+mapCountryData(matched,nameColumnToPlot="value",missingCountryCol = "white",
+               borderCol = "grey",
+               catMethod = "pretty", colourPalette = "topo",
+               mapTitle = c("Clusters"), lwd=1)
+
+```
+
+Let's see the distribution of the clusters considering the Human Development Index:
+
+```{r}
+as.data.frame(X) %>% mutate(cluster=factor(fit.pam$clustering), names=names, hdi=HDI) %>%
+  ggplot(aes(x = cluster, y = hdi)) + 
+  geom_boxplot(fill="lightblue") +
+  labs(title = "HDI by cluster", x = "", y = "", col = "") 
+```
+
+# Kernel k-means
+
+Try to capture clusters that are not linearly separable in input space
+
+```{r}
+# most useful one
+library(kernlab)
+
+# the data set must be a matrix
+fit.ker <- kkmeans(as.matrix(X), centers=5, kernel="rbfdot") # Radial Basis kernel (Gaussian)
+# By default, Gaussian kernel is used
+# By default, sigma parameter is estimated
+
+centers(fit.ker)
+size(fit.ker)
+withinss(fit.ker)
+
+object.ker = list(data = X, cluster = fit.ker@.Data)
+fviz_cluster(object.ker, geom = c("point"), ellipse=F,pointsize=1)+
+  theme_minimal()+geom_text(label=names,hjust=0, vjust=0,size=2,check_overlap = T)+scale_fill_brewer(palette="Paired")
+```
+
+# Hierarchical clustering
+
+Important to decide distance between observations and linkage to join groups
+
+We need to decide first the distance and linkage
+
+```{r}
+# ADD HERE YOUR CHOICE
+d = dist(scale(X), method = "euclidean")
+hc <- hclust(d, method = "ward.D2") 
+```
+
+## Visualization
+
+Classical dendrogram:
+
+```{r}
+hc$labels <- names
+
+fviz_dend(x = hc, 
+          k=5,
+          palette = "jco", 
+          rect = TRUE, rect_fill = TRUE, 
+          rect_border = "jco"          
+)
+```
+
+Difficult to visualize the countries
+
+Let's use a phylogenic tree:
+
+```{r}
+library(igraph)
+fviz_dend(x = hc,
+          k = 5,
+          color_labels_by_k = TRUE,
+          k_colors = c("#008080", "#40E0D0", "#DE3163", "#FFBF00", "#6495ED"),
+          cex = 0.8,
+          type = "phylogenic",
+          repel = TRUE)+  labs(title="Socio-economic-health tree clustering of the world") + theme(axis.text.x=element_blank(),axis.text.y=element_blank())
+```
+
+Now in a geographical map
+
+```{r}
+groups.hc = cutree(hc, k = 5)
+
+# Map our PCA index in a map:
+map = data.frame(country=names, value=groups.hc)
+#Convert the country code into iso3c using the function countrycode()
+map$country = countrycode(map$country, 'country.name', 'iso3c')
+#Create data object supporting the map
+matched <- joinCountryData2Map(map, joinCode = "ISO3",
+                               nameJoinColumn = "country")
+#Draw the map
+mapCountryData(matched,nameColumnToPlot="value",missingCountryCol = "white",
+               borderCol = "#C7D9FF",
+               catMethod = "pretty", colourPalette = c("#008080", "#40E0D0", "#DE3163", "#FFBF00", "#6495ED"),
+               mapTitle = c("Clusters"), lwd=1)+scale_fill_viridis(option = "D")
+
+```
+
+# EM clustering
+
+Expectation-Maximization clustering is like k-means but computes probabilities of cluster memberships based on probability distributions
+
+Hence, the goal of the EM clustering then is to maximize the overall likelihood of the data, given the (final) clusters
+
+```{r}
+res.Mclust <- Mclust(scale(X))
+summary(res.Mclust)
+
+# The clustering is probabilistic: for each country we don't have a unique group but the probabilities the country belongs to each of the groups
+head(res.Mclust$z)
+
+# Of course the tool assign the group with highest probability  
+head(res.Mclust$classification)
+```
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "BIC", pallete = "jco") +
+  scale_x_discrete(limits = c(1:10))
+```
+
+5 groups is ok
+
+Clusplot
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "classification", geom = "point",
+            pallete = "jco")
+
+```
+
+How similar are the clusters?
+
+```{r}
+# Computes the adjusted Rand index comparing two classifications.
+# The closer to 1 the more agreement
+adjustedRandIndex(res.Mclust$classification, fit.pam$clustering) 
+adjustedRandIndex(res.Mclust$classification, groups.hc) 
+```
+
+Insights?
+
+Visualization in a map
+
+```{r}
+library(viridis)
+groups.mclust = res.Mclust$classification
+
+# Map our PCA index in a map:
+map = data.frame(country=names, value=groups.mclust)
+#Convert the country code into iso3c using the function countrycode()
+map$country = countrycode(map$country, 'country.name', 'iso3c')
+#Create data object supporting the map
+matched <- joinCountryData2Map(map, joinCode = "ISO3",
+                               nameJoinColumn = "country")
+#Draw the map
+mapCountryData(matched,nameColumnToPlot="value",missingCountryCol = "white",
+               borderCol = "#C7D9FF",
+               catMethod = "pretty", colourPalette = viridis(8),
+               mapTitle = c("Clusters"), lwd=1)
+
+```
+
+# Heatmaps
+
+A heat map is a false color image (based on data frame X) with a dendrogram added to the left side and to the top
+
+```{r}
+heatmap(scale(X), scale = "none",
+        distfun = function(x){dist(x, method = "euclidean")},
+        hclustfun = function(x){hclust(x, method = "ward.D2")},
+        cexRow = 0.7)
+```

@@ -1,0 +1,394 @@
+---
+title: "PCA: sports analytics"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+```{r, echo=FALSE}
+setwd("~/OneDrive - Universidad Carlos III de Madrid/U/Clases/Segundo/Semestre 1/Stat Learning/Reducida/3 Unsupervised Learning/Case Study sports analytics (NBA)")
+htmltools::img(src = knitr::image_uri(file.path("uc3m.jpg")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:0; right:0; padding:10px;',
+               width="600",
+               height="80")
+```
+
+# Motivation
+
+**Sports analytics:** collection of relevant, historical, statistics that can provide a competitive advantage to a team or individual. 
+
+In this case study, we will analyze data from NBA and try to answer these questions
+
+- How can we know who are the best NBA players based on basketball skills (not only points)?
+
+- Do NBA players have skills that exceed their predefined positions (point guard, shooting guard, small forward, power forward, and center)?
+
+- Can we help NBA coaches to make better decisions? Are they really making right decisions?
+
+
+```{r}
+# delete everything
+rm(list=ls()) 
+
+library(tidyverse)
+library(GGally) # ggplot2-based visualization of correlations
+library(factoextra) # ggplot2-based visualization of pca
+```
+
+## Load and prepare data  
+
+Currently, the NBA is composed of 30 teams (29 in the United States and 1 in Canada) with more than 500 players
+
+Data from last season: https://www.basketball-reference.com/leagues/NBA_2022_per_game.html
+
+The dataset contains skill performance of all the players (605) during the last season 2020-21
+
+The glossary is in the web page. Performance is per game
+
+
+```{r}
+players.df = read.csv(file = "NBA_2022.csv")
+
+glimpse(players.df)
+```
+
+
+## Missing values
+
+```{r}
+# To know how many missing values for each player
+hist(rowMeans(is.na(players.df)))
+
+barplot(colMeans(is.na(players.df)), las=2)
+```
+
+Conclusions? What can we do?
+
+
+## Some feature engineering
+
+We are going to skip the following variables:
+
+- Rk: Rank
+
+- Player: Player's name
+
+- Pos: Position
+
+- Age: Player's age on February 1 of the season
+
+- Tm: Team
+
+- G and GS: Games played and started (they depend on the coach, not the player's skills)
+
+- MP: Minutes played per game (they depend on the coach, not the player's skills)
+
+
+```{r}
+nba <- players.df[, 9:ncol(players.df)]
+
+names = players.df[, 2]
+names = names %>% str_replace("\\\\.*$", "")  
+pos = players.df[,3]
+team = players.df[,5]
+gp = players.df[,6]
+min = players.df[,8]
+points = players.df[,30]
+
+dim(nba)
+summary(nba)
+```
+
+We remove some variable as they are redundant: 
+ 
+ - PTS, because PTS = FT + 2 * X2P + 3 * X3P (these are points per game)
+ - TRB, because TRB = ORB + DRB
+ - FG and FGA, because FG = X2P + X3P and FGA = X2PA + X3PA
+ - eFG., because eFG. = (FG + 0.5 * X3P) / FGA = (X2P + 1.5 * X3P) / (X2PA + X3PA)
+ - X2P. and X3P., because X2P. = X2P / X2PA and X3P. = X3P / X3PA
+
+The decision about the final variables to consider (input) is key and will affect the output.
+
+We are going to consider the following variables to measure skill performance:
+
+- X2P: 2-Point Field Goals Per Game
+- X2PA: 2-Point Field Goal Attempts Per Game
+- X3P: 3-Point Field Goals Per Game
+- X3PA: 3-Point Field Goal Attempts Per Game
+- FT: Free Throws Per Game
+- FTA: Free Throw Attempts Per Game
+- ORB: Offensive Rebounds Per Game
+- DRB: Defensive Rebounds Per Game
+- AST: Assists Per Game
+- STL: Steals Per Game
+- BLK: Blocks Per Game
+- TOV: Turnovers Per Game
+- PF: Personal Fouls Per Game
+
+```{r}
+nba = nba[, c("X2P", "X2PA", "X3P", "X3PA", "FT", "FTA", "ORB", "DRB", "AST", "STL", "BLK", "TOV", "PF")]
+dim(nba)
+```
+
+# Descriptive Analysis
+
+Our input has dimension $p = 13$, that implies $2^p$ different relations between the variables.
+
+Dimension 1: univariate analysis for all 13 variables
+
+```{r}
+# Enter your code here to plot the boxplots and scaled boxplots
+boxplot(scale(nba), col = "salmon")
+
+```
+
+Dimension 2:  bivariate analysis (scatter plots), in total 105
+
+```{r}
+# Enter your code here to display a correlation graph
+plot(scale(nba), col = "lightblue")
+ggcorr(nba, label = "TRUE")
+```
+
+Conclusions?
+
+Dimension 3: proportional to $13^3$ relations, but no way to obtain information... This is why we need an analytical tool to reduce the dimension
+
+Finally, note there are variables highly correlated, especially the most related ones (like ftm and fta)
+
+# PCA
+
+From dimension 13 to dimension 2
+
+```{r}
+pca = prcomp(nba, scale=T) # this principal component analysis
+# pca = princomp(nba, cor=T) # the same, but using SVD instead of eigen decomposition 
+summary(pca)
+```
+
+Insights?
+
+This is the same, but using mathematical format; here, eigenvalues denote variances and eigenvectors denote loadings:
+
+```{r}
+R = cor(nba)   # correlation matrix
+eigen(R) 
+```
+
+## How many components?
+
+```{r}
+screeplot(pca,main="Screeplot",col="yellowgreen",type="barplot",pch=19)
+```
+
+Nicer with factoextra package:
+
+```{r}
+fviz_screeplot(pca, addlabels = TRUE)
+```
+
+Note with 2 components we explain 75% of variability
+
+## Interpretation of components
+
+First component:
+
+```{r}
+# FIRST PRINCIPAL COMPONENT
+barplot(pca$rotation[,1], las=2, col="palevioletred4")
+```
+
+Any hint for the meaning of the 1st PC?
+
+Note the sum of the squared loadings (eigenvectors) is equal to 1
+
+```{r}
+sum(pca$rotation[,1]^2)
+```
+
+That means squared loadings are easier to interpret than the loadings
+
+I.e. they are like percentages (numbers between 0 and 1)
+
+So let's plot squared loadings instead
+
+They are called contribution of variables to components
+
+```{r}
+fviz_contrib(pca, choice = "var", axes = 1) # Line = average of contribution
+```
+
+The red dashed line on the graph above indicates the expected average contribution 
+
+If the contribution of the variables were uniform, the expected value would be 1/length(variables) = 1/15 = 6.6%
+
+Now we can rank the players by their first PC scores: best historical players in terms of performance:
+
+```{r}
+# The worst
+names[order(pca$x[,1])][(length(names)-5):length(names)]
+
+# The best
+names[order(pca$x[,1])][1:10]
+```
+
+Nikola Jokić was the Most Valuable Player in the season:  https://www.basketball-reference.com/leagues/NBA_2021_leaders.html
+
+Second component:
+
+```{r}
+barplot(pca$rotation[,2], las=2, col="lightgreen")
+```
+
+Any insight about this component? Forward vs Guard?
+
+Maybe we can get more insights by ranking the players using this component:
+
+```{r}
+names[order(pca$x[,2])][1:6]
+names[order(pca$x[,2])][(length(names)-5):length(names)]
+```
+
+Contribution of variables to second component:
+
+Take care because we loose the sign (to get contribution in percentage)
+
+```{r}
+fviz_contrib(pca, choice = "var", axes = 2)
+```
+
+Once we have interpreted the meaning of the first two components, let's see the contribution of each player to components
+
+For the $i$-th player and first component, the contribution is: $z_{1,i}^2 / \lambda_1 / n$, which is a number between 0 and 1
+
+```{r}
+head(get_pca_ind(pca)$contrib[,1]) # this is in %, that is between 0 and 100
+head((pca$x[,1]^2)/(pca$sdev[1]^2))/dim(nba)[1] # this is between 0 and 1
+```
+
+Let's visualize the top-100 players contributions to first component (global performance):
+
+```{r}
+fviz_contrib(pca, choice = "ind", axes = 1, top=100)
+```
+
+Let's see the first names:
+
+```{r}
+names[order(get_pca_ind(pca)$contrib[,1],decreasing=T)][1:10]
+# It is very similar to names[order(pca$x[,1])][1:10] but in percentage
+```
+
+Finally, let's make a zoom to see the top-20 players in contributions:
+
+```{r}
+names_z1 = names[order(get_pca_ind(pca)$contrib[,1],decreasing=T)]
+#THESE ARE THE BEST 10 PLAYERS
+fviz_contrib(pca, choice = "ind", axes = 1, top=20)+scale_x_discrete(labels=names_z1)
+```
+
+## The Biplot
+
+Biplot: observations and variables in same graph (using first 2 components)
+
+```{r}
+biplot(pca)
+```
+
+Not informative in this case: too many players
+
+Nicer and using contributions (instead of loadings), without players:
+
+```{r}
+# correlation in the unit circle, how it contributes to the variables, Color and length.
+fviz_pca_var(pca, col.var = "contrib")
+```
+
+Nicer but again too much information:
+
+```{r}
+fviz_pca_biplot(pca, repel = TRUE)
+```
+
+## The Scores
+
+Remember, for the $j$-th principal component: $Z_j = X a_j$, $a_j$ denotes the loadings, and $Z_j$ denotes the scores
+
+Let's plot the first two scores, using colors for minutes played:
+
+```{r}
+data.frame(z1=-pca$x[,1],z2=pca$x[,2]) %>% 
+  ggplot(aes(z1,z2,label=names,color=min)) + geom_point(size=0) +
+  labs(title="PCA", x="PC1", y="PC2") +
+  theme_bw() + scale_color_gradient(low="lightblue", high="darkblue")+theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE) 
+```
+
+The first two PCs seem independent, but this is not always the same. What is true is that they are always uncorrelated.
+
+The first component is highly correlated with minutes (decided by coaches)
+
+The same, but using colors for games played:
+
+```{r}
+data.frame(z1=-pca$x[,1],z2=pca$x[,2]) %>% 
+  ggplot(aes(z1,z2,label=names,color=gp)) + geom_point(size=0) +
+  labs(title="PCA", x="PC1", y="PC2") +
+  theme_bw() + scale_color_gradient(low="yellow", high="darkred")+theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE) 
+```
+
+Insights?
+
+Which are the teams with the best players?
+
+```{r}
+data.frame(z1=-pca$x[,1],team=team) %>% group_by(team) %>% summarise(mean=mean(z1)) %>% arrange(desc(mean))
+```
+
+Portland Trail Blazers has the best overall players
+
+Other view: are the better players playing more minutes in a game?
+
+```{r}
+data.frame(z1=-pca$x[,1],z2=min) %>% 
+  ggplot(aes(z1,z2,label=names,color=gp)) + geom_point(size=0) +
+  labs(title="Performance", x="PC1", y="Minutes per game") +
+  scale_color_gradient(low="lightblue", high="darkblue") +
+  theme_bw() + theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE)
+```
+
+Yes, but non-linear... why?
+
+Are the better players playing more games?
+
+```{r}
+data.frame(z1=-pca$x[,1],z2=gp) %>% 
+  ggplot(aes(z1,z2,label=names,color=min)) + geom_point(size=0) +
+  labs(title="Performance", x="PC1", y="Games played") +
+  scale_color_gradient(low="lightblue", high="darkblue") +
+  theme_bw() + theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE)
+```
+
+Somehow, but not too much... why?
+

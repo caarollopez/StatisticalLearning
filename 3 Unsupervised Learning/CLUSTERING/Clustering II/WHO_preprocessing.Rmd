@@ -1,0 +1,187 @@
+---
+title: "Notebook to download socio-economic data in the world"
+author: "Statistical Learning, Bachelor in Data Science and Engineering"
+date: 'UC3M, 2022'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+
+```{r, echo=FALSE}
+htmltools::img(src = knitr::image_uri(file.path("uc3m.jpg")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:0; right:0; padding:10px;',
+               width="600",
+               height="80")
+```
+
+Load and prepare data from the World Health Organization (WHO) connecting through its API
+
+Here we can browse WHO data by topic:
+  https://apps.who.int/gho/data/node.main
+  
+Names for indicators are here: https://www.who.int/data/gho/data/indicators/indicators-index  
+
+```{r}
+# devtools::install_github("pierucci/rgho@devel")
+library(rgho)  #Api WHO
+library(tidyverse)
+library(countrycode)
+library(rworldmap)
+library(GGally)
+library(readxl)
+
+```
+
+Let's start downloading variables from WHO
+  
+```{r}
+# Create a data frame with all countries in the world
+
+WHO = get_gho_values(dimension = "COUNTRY")
+
+
+# WHO = dplyr::arrange(
+#   data.frame(
+#     get_gho_values(dimension = "COUNTRY")
+#   ), 
+#   Label)
+
+# Regions:
+#  AFR  Africa
+#  AMR  Americas
+#  EMR  Eastern Mediterranean
+#  EUR  Europe
+#  SEAR South-East Asia
+#  WPR  Western Pacific
+
+WHO = WHO %>% rename(Country=Title, COUNTRY=Code)
+
+# WHOSIS_000001: Life expectancy at birth (years)
+var = get_gho_data("WHOSIS_000001") %>% mutate(LifeExpectancy=NumericValue) %>%
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% arrange(SEX) %>% slice(1) %>% 
+  dplyr::select(COUNTRY, LifeExpectancy)
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+dim(WHO)
+
+# RS_576: Gross national income per capita
+var = get_gho_data("RS_576") %>% mutate(GNI = NumericValue) %>% 
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% 
+  dplyr::select(COUNTRY, GNI) 
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# MDG_0000000001: Infant mortality rate (probability of dying between birth and age 1 per 1000 live births)
+var = get_gho_data("MDG_0000000001") %>% mutate(IMR = NumericValue) %>% 
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% arrange(SEX) %>% slice(1) %>% 
+  dplyr::select(COUNTRY, IMR) 
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# # WHS9_86: Population (in thousands) total
+# var = get_gho_data("WHS9_86") %>% mutate(Population = Numeric) %>%
+#   group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>%
+#   dplyr::select(COUNTRY, Population)
+# WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# Population is now taken from World Bank data bank, available through tidyr
+var = filter(world_bank_pop, indicator=="SP.POP.TOTL")[,c(1,20)]
+names(var) = c("COUNTRY", "Population")
+var$Population = var$Population/1000
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# SDGPM25 : Annual mean levels of fine particulate matter (PM2.5)
+var = get_gho_data("SDGPM25") %>% mutate(AirPollution = NumericValue) %>%
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>%
+  dplyr::select(COUNTRY, AirPollution)
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# VIOLENCE_HOMICIDERATE: Estimates of rates of homicides per 100 000 population
+var = get_gho_data("VIOLENCE_HOMICIDERATE") %>% mutate(HomicidesRate = NumericValue) %>% 
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>% 
+  dplyr::select(COUNTRY, HomicidesRate) 
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# WHS6_102: Hospital beds (per 10 000 population)
+var = get_gho_data("WHS6_102") %>% mutate(HospitalBeds = NumericValue) %>% 
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>% 
+  dplyr::select(COUNTRY, HospitalBeds) 
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# WHS7_143: Total expenditure on health as a percentage of gross domestic product
+# var = get_gho_data("WHS7_143") %>% mutate(HealthExpenditure = Numeric) %>% 
+#   group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>% 
+#   dplyr::select(COUNTRY, HealthExpenditure) 
+# WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# ITU_ICT_1: Percentage of individuals using the Internet
+var = get_gho_data("ITU_ICT_1") %>% mutate(Internet = NumericValue) %>% 
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>% 
+  dplyr::select(COUNTRY, Internet) 
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# HRH_26: Physicians density (per 1000 population)
+# var = get_gho_data("HRH_26") %>% mutate(Physicians = Numeric) %>% 
+#   group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>% 
+#   dplyr::select(COUNTRY, Physicians) 
+# WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+# HWF_0001: Medical doctors (per 10,000 population)
+var = get_gho_data("HWF_0001") %>% mutate(Physicians = NumericValue) %>%
+  group_by(COUNTRY) %>% filter(YEAR==max(YEAR,na.rm=T)) %>% slice(1) %>%
+  dplyr::select(COUNTRY, Physicians)
+WHO = merge(WHO, var, by="COUNTRY", all=T)
+
+
+# Names for Continents and Regions, and remove countries with no Region
+WHO$Continent = countrycode(WHO$Country, "country.name", destination="continent")
+WHO$Region = countrycode(WHO$Country, "country.name", destination="region")
+WHO = WHO %>% drop_na(Continent,Region)
+
+WHO = WHO %>% 
+  dplyr::select(Country,COUNTRY,Continent, Region, everything())
+```
+
+Download now data from the Human Development Report
+
+https://hdr.undp.org/data-center/human-development-index#/indicies/HDI
+
+
+```{r}
+download.file("https://hdr.undp.org/sites/default/files/2021-22_HDR/HDR21-22_Statistical_Annex_HDI_Table.xlsx", destfile = "HDI.xlsx")
+
+hddata <- read_xlsx("HDI.xlsx", range="B9:K202", col_names = F)
+hddata = hddata[, c(1,2,4,6,8,10)]
+names(hddata) = c("Country", "HDI", "LifeExpectancy", "Schooling1", "Schooling2", "GNI")
+hddata = hddata %>% filter(!is.na(HDI))
+# Schooling1 = mean of years of schooling for adults aged 25 years and more 
+# Schooling2 = expected years of schooling for children of school entering age
+# Human Development Index (HDI)
+
+hddata$COUNTRY = countrycode(hddata$Country, 'country.name', 'iso3c')
+
+df = merge(WHO, select(hddata, HDI, Schooling1, Schooling2, COUNTRY), by="COUNTRY")
+```
+
+Write the file to load it later
+
+```{r}
+write.table(df, "WorldData2022.txt", sep=",")
+```
